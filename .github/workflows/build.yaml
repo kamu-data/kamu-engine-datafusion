@@ -1,0 +1,52 @@
+name: build
+on:
+  push:
+    paths-ignore:
+      - "image/**"
+      - "**.md"
+  workflow_dispatch: {} # manual trigger
+env:
+  RUST_LOG: "debug"
+  RUST_LOG_SPAN_EVENTS: "new,close"
+  RUST_BACKTRACE: "1"
+jobs:
+  lint_fmt:
+    name: Lint / Formatting
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions-rs/toolchain@v1 # Uses rust-toolchain file
+        with:
+          components: rustfmt
+      - name: cargo fmt --check
+        uses: actions-rs/cargo@v1
+        with:
+          command: fmt
+          args: --check
+
+  lint_deps:
+    name: Lint / Dependencies
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions-rs/toolchain@v1 # Uses rust-toolchain file
+      - run: cargo install --locked cargo-deny
+      - run: cargo deny check
+
+  test_linux:
+    name: Test / Linux
+    runs-on: ubuntu-latest
+    env:
+      CARGO_FLAGS: --profile ci
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions-rs/toolchain@v1 # Uses rust-toolchain file
+      - uses: swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+      - name: build
+        run: cargo test ${{ env.CARGO_FLAGS }} --no-run
+      - name: run tests
+        run: cargo test ${{ env.CARGO_FLAGS }}
+      - name: check git diff 
+        run: git diff && git diff-index --quiet HEAD # Ensure all generated files are up-to-date
