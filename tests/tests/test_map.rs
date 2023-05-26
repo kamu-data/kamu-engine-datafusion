@@ -6,14 +6,14 @@ use kamu_engine_datafusion::engine::Engine;
 use opendatafabric::*;
 
 fn write_sample_data(path: impl AsRef<Path>) {
-    use datafusion::arrow::array::{StringArray, TimestampMillisecondArray, UInt64Array};
+    use datafusion::arrow::array;
     use datafusion::arrow::datatypes::{DataType, Field, Schema, TimeUnit};
     use datafusion::arrow::record_batch::RecordBatch;
 
     let schema = Arc::new(Schema::new(vec![
         Field::new(
             DatasetVocabulary::DEFAULT_OFFSET_COLUMN_NAME,
-            DataType::UInt64,
+            DataType::Int64,
             false,
         ),
         Field::new(
@@ -27,7 +27,7 @@ fn write_sample_data(path: impl AsRef<Path>) {
             false,
         ),
         Field::new("city", DataType::Utf8, false),
-        Field::new("population", DataType::UInt64, false),
+        Field::new("population", DataType::Int64, false),
     ]));
 
     let system_time = DateTime::parse_from_rfc3339("2023-02-01T00:00:00Z")
@@ -40,17 +40,21 @@ fn write_sample_data(path: impl AsRef<Path>) {
     let record_batch = RecordBatch::try_new(
         schema,
         vec![
-            Arc::new(UInt64Array::from(vec![0, 1, 2])),
-            Arc::new(TimestampMillisecondArray::from(vec![
+            Arc::new(array::Int64Array::from(vec![0, 1, 2])),
+            Arc::new(array::TimestampMillisecondArray::from(vec![
                 system_time,
                 system_time,
                 system_time,
             ])),
-            Arc::new(TimestampMillisecondArray::from(vec![
+            Arc::new(array::TimestampMillisecondArray::from(vec![
                 event_time, event_time, event_time,
             ])),
-            Arc::new(StringArray::from(vec!["vancouver", "seattle", "kyiv"])),
-            Arc::new(UInt64Array::from(vec![675_000, 733_000, 2_884_000])),
+            Arc::new(array::StringArray::from(vec![
+                "vancouver",
+                "seattle",
+                "kyiv",
+            ])),
+            Arc::new(array::Int64Array::from(vec![675_000, 733_000, 2_884_000])),
         ],
     )
     .unwrap();

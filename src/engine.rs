@@ -224,7 +224,7 @@ impl Engine {
             &vocab.offset_column,
             cast(
                 col(&vocab.offset_column as &str) + lit(start_offset - 1),
-                DataType::UInt64,
+                DataType::Int64,
             ),
         )?;
 
@@ -267,6 +267,9 @@ impl Engine {
         std::fs::remove_dir(path)?;
         std::fs::rename(tmp_path, path)?;
 
+        // Read file back and use metadata to understand how many rows were written
+        // TODO: Is this the most performant way to do this or should we cache DF in
+        // memory?
         let reader = SerializedFileReader::new(std::fs::File::open(path).unwrap()).unwrap();
         let num_rows: i64 = reader
             .metadata()
