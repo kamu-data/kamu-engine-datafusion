@@ -9,6 +9,8 @@ use datafusion::logical_expr::expr::WindowFunction;
 use datafusion::logical_expr::{CreateView, DdlStatement, LogicalPlan};
 use datafusion::prelude::*;
 use datafusion::sql::TableReference;
+use internal_error::*;
+use opendatafabric::engine::ExecuteQueryError;
 use opendatafabric::*;
 
 use crate::datafusion_hacks::ListingTableOfFiles;
@@ -27,7 +29,7 @@ impl Engine {
     pub async fn execute_query(
         &self,
         request: ExecuteQueryRequest,
-    ) -> Result<ExecuteQueryResponse, Box<dyn std::error::Error>> {
+    ) -> Result<ExecuteQueryResponseSuccess, ExecuteQueryError> {
         let Transform::Sql(transform) = request.transform;
         let transform = transform.normalize_queries();
         let vocab = DatasetVocabularyResolved::from(&request.vocab);
@@ -50,12 +52,14 @@ impl Engine {
                     .map(|p| p.to_string_lossy().into())
                     .collect(),
             )
-            .await?;
+            .await
+            .int_err()?;
 
             ctx.register_table(
                 TableReference::bare(input.dataset_name.as_str()),
                 Arc::new(table),
-            )?;
+            )
+            .int_err()?;
         }
 
         // Setup queries
@@ -64,11 +68,10 @@ impl Engine {
                 Ok(plan) => plan,
                 Err(error) => {
                     tracing::debug!(?error, query = %step.query, "Error when setting up query");
-                    return Ok(ExecuteQueryResponse::InvalidQuery(
-                        ExecuteQueryResponseInvalidQuery {
-                            message: error.to_string(),
-                        },
-                    ));
+                    return Err(ExecuteQueryResponseInvalidQuery {
+                        message: error.to_string(),
+                    }
+                    .into());
                 }
             };
 
@@ -85,21 +88,24 @@ impl Engine {
                 definition: Some(step.query),
             }));
 
-            ctx.execute_logical_plan(create_view).await?;
+            ctx.execute_logical_plan(create_view).await.int_err()?;
         }
 
         let df = ctx
             .table(TableReference::bare(request.dataset_name.as_str()))
-            .await?;
+            .await
+            .int_err()?;
 
-        if let Some(error) = Self::validate_raw_result(&df, &vocab) {
-            return Ok(error);
-        }
+        Self::validate_raw_result(&df, &vocab)?;
 
-        let df = Self::with_system_columns(df, &vocab, request.system_time, request.offset).await?;
+        let df = Self::with_system_columns(df, &vocab, request.system_time, request.offset)
+            .await
+            .int_err()?;
 
         // TODO: compression
-        let num_rows = Self::write_parquet_single_file(df, &request.out_data_path).await?;
+        let num_rows = Self::write_parquet_single_file(df, &request.out_data_path)
+            .await
+            .int_err()?;
 
         // Compute output watermark as minimum of all inputs
         // This will change when we add support for aggregation, joins and other
@@ -113,40 +119,39 @@ impl Engine {
             .map(|dt| dt.clone());
 
         if num_rows == 0 {
-            Ok(ExecuteQueryResponse::Success(ExecuteQueryResponseSuccess {
+            Ok(ExecuteQueryResponseSuccess {
                 data_interval: None,
                 output_watermark,
-            }))
+            })
         } else {
-            Ok(ExecuteQueryResponse::Success(ExecuteQueryResponseSuccess {
+            Ok(ExecuteQueryResponseSuccess {
                 data_interval: Some(OffsetInterval {
                     start: request.offset,
                     end: request.offset + num_rows - 1,
                 }),
                 output_watermark,
-            }))
+            })
         }
     }
 
     fn validate_raw_result(
         df: &DataFrame,
         vocab: &DatasetVocabularyResolved<'_>,
-    ) -> Option<ExecuteQueryResponse> {
+    ) -> Result<(), ExecuteQueryError> {
         tracing::info!(schema = ?df.schema(), "Raw result schema computed");
 
         let system_columns = [&vocab.offset_column, &vocab.system_time_column];
         for system_column in system_columns {
             if df.schema().has_column_with_unqualified_name(system_column) {
-                return Some(ExecuteQueryResponse::InvalidQuery(
-                    ExecuteQueryResponseInvalidQuery {
-                        message: format!(
-                            "Transformed data contains a column that conflicts with the system \
-                             column name, you should either rename the data column or configure \
-                             the dataset vocabulary to use a different name: {}",
-                            system_column
-                        ),
-                    },
-                ));
+                return Err(ExecuteQueryResponseInvalidQuery {
+                    message: format!(
+                        "Transformed data contains a column that conflicts with the system column \
+                         name, you should either rename the data column or configure the dataset \
+                         vocabulary to use a different name: {}",
+                        system_column
+                    ),
+                }
+                .into());
             }
         }
 
@@ -160,34 +165,32 @@ impl Engine {
             match event_time_col.data_type() {
                 DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, _) => {}
                 typ => {
-                    return Some(ExecuteQueryResponse::InvalidQuery(
-                        ExecuteQueryResponseInvalidQuery {
-                            message: format!(
-                                "Event time column should be either Date or Timestamp, found: {}",
-                                typ
-                            ),
-                        },
-                    ));
+                    return Err(ExecuteQueryResponseInvalidQuery {
+                        message: format!(
+                            "Event time column should be either Date or Timestamp, found: {}",
+                            typ
+                        ),
+                    }
+                    .into());
                 }
             }
         } else {
-            return Some(ExecuteQueryResponse::InvalidQuery(
-                ExecuteQueryResponseInvalidQuery {
-                    message: format!(
-                        "Event time column {} was not found amongst: {}",
-                        vocab.event_time_column,
-                        df.schema()
-                            .fields()
-                            .iter()
-                            .map(|f| f.name().as_str())
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    ),
-                },
-            ));
+            return Err(ExecuteQueryResponseInvalidQuery {
+                message: format!(
+                    "Event time column {} was not found amongst: {}",
+                    vocab.event_time_column,
+                    df.schema()
+                        .fields()
+                        .iter()
+                        .map(|f| f.name().as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+            }
+            .into());
         }
 
-        None
+        Ok(())
     }
 
     async fn with_system_columns(

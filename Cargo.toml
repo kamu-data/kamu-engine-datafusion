@@ -1,6 +1,6 @@
 [package]
 name = "kamu-engine-datafusion"
-version = "0.1.1"
+version = "0.1.2"
 authors = ["Kamu Data Inc. <info@kamu.dev>"]
 license-file = "LICENSE.txt"
 edition = "2021"
@@ -13,6 +13,7 @@ doctest = false
 
 [dependencies]
 # Kamu
+internal-error = { git = "https://github.com/kamu-data/kamu-cli", branch = "features/datafusion-engine", default-features = false }
 opendatafabric = { git = "https://github.com/kamu-data/kamu-cli", branch = "features/datafusion-engine", default-features = false }
 
 # Data

@@ -1,8 +1,10 @@
+use std::assert_matches::assert_matches;
 use std::path::Path;
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use kamu_engine_datafusion::engine::Engine;
+use opendatafabric::engine::ExecuteQueryError;
 use opendatafabric::*;
 
 fn write_sample_data(path: impl AsRef<Path>) {
@@ -95,7 +97,7 @@ async fn read_data_pretty(path: impl AsRef<Path>) -> String {
 struct TestQueryCommonOpts {
     queries: Option<Vec<SqlQueryStep>>,
     mutate_request: Option<Box<dyn FnOnce(ExecuteQueryRequest) -> ExecuteQueryRequest>>,
-    expected_result: Option<ExecuteQueryResponse>,
+    check_result: Option<Box<dyn FnOnce(Result<ExecuteQueryResponseSuccess, ExecuteQueryError>)>>,
     expected_data: Option<Option<&'static str>>,
     expected_watermark: Option<Option<DateTime<Utc>>>,
 }
@@ -117,12 +119,6 @@ async fn test_query_common(opts: TestQueryCommonOpts) {
 +--------+---------------------+---------------------+-----------+------------+
         "#,
     ));
-    let expected_result = opts
-        .expected_result
-        .unwrap_or(ExecuteQueryResponse::Success(ExecuteQueryResponseSuccess {
-            data_interval: Some(OffsetInterval { start: 10, end: 12 }),
-            output_watermark: opts.expected_watermark.unwrap_or(None),
-        }));
 
     // Run test
     let tempdir = tempfile::tempdir().unwrap();
@@ -167,9 +163,19 @@ async fn test_query_common(opts: TestQueryCommonOpts) {
         request
     };
 
-    let actual_result = engine.execute_query(request).await.unwrap();
+    let actual_result = engine.execute_query(request).await;
 
-    assert_eq!(actual_result, expected_result);
+    if let Some(check_result) = opts.check_result {
+        check_result(actual_result)
+    } else {
+        assert_eq!(
+            actual_result.unwrap(),
+            ExecuteQueryResponseSuccess {
+                data_interval: Some(OffsetInterval { start: 10, end: 12 }),
+                output_watermark: opts.expected_watermark.unwrap_or(None),
+            }
+        );
+    }
 
     if let Some(expected_data) = expected_data {
         let actual_data = read_data_pretty(&output_data_path).await;
@@ -236,9 +242,14 @@ async fn test_empty_result() {
             alias: None,
             query: "select event_time, city, population from foo where city = 'mumbai'".to_string(),
         }]),
-        expected_result: Some(ExecuteQueryResponse::Success(ExecuteQueryResponseSuccess {
-            data_interval: None,
-            output_watermark: None,
+        check_result: Some(Box::new(|res| {
+            assert_eq!(
+                res.unwrap(),
+                ExecuteQueryResponseSuccess {
+                    data_interval: None,
+                    output_watermark: None,
+                }
+            )
         })),
         expected_data: Some(None),
         ..Default::default()
@@ -253,13 +264,9 @@ async fn test_bad_sql() {
             alias: None,
             query: "select event_time, city, populllation from foo".to_string(),
         }]),
-        expected_result: Some(ExecuteQueryResponse::InvalidQuery(
-            ExecuteQueryResponseInvalidQuery {
-                message: "Schema error: No field named populllation. Valid fields are foo.offset, \
-                          foo.system_time, foo.event_time, foo.city, foo.population."
-                    .to_string(),
-            },
-        )),
+        check_result: Some(Box::new(|res| {
+            assert_matches!(res, Err(ExecuteQueryError::InvalidQuery(_)))
+        })),
         expected_data: Some(None),
         ..Default::default()
     })
@@ -297,12 +304,9 @@ async fn test_event_time_as_invalid_type() {
             alias: None,
             query: "select 123 as event_time, city, population from foo".to_string(),
         }]),
-        expected_result: Some(ExecuteQueryResponse::InvalidQuery(
-            ExecuteQueryResponseInvalidQuery {
-                message: "Event time column should be either Date or Timestamp, found: Int64"
-                    .to_string(),
-            },
-        )),
+        check_result: Some(Box::new(|res| {
+            assert_matches!(res, Err(ExecuteQueryError::InvalidQuery(_)))
+        })),
         expected_data: Some(None),
         ..Default::default()
     })
