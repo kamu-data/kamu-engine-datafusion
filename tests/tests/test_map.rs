@@ -312,3 +312,55 @@ async fn test_event_time_as_invalid_type() {
     })
     .await
 }
+
+// FIXME: https://github.com/apache/arrow-datafusion/issues/6463
+#[test_log::test(tokio::test)]
+#[should_panic]
+async fn test_issues_6463() {
+    use datafusion::prelude::*;
+    let ctx = SessionContext::new();
+
+    ctx.register_parquet("ab", "data/alberta.parquet", ParquetReadOptions::default())
+        .await
+        .unwrap();
+    ctx.register_parquet(
+        "bc",
+        "data/british-columbia.parquet",
+        ParquetReadOptions::default(),
+    )
+    .await
+    .unwrap();
+
+    let df = ctx
+        .sql(
+            r#"
+            SELECT * FROM (
+                SELECT
+                    'AB' as province,
+                    id,
+                    reported_date,
+                    gender,
+                    location
+                FROM ab
+                UNION ALL
+                SELECT
+                    'BC' as province,
+                    id,
+                    reported_date,
+                    gender,
+                    location
+                FROM bc
+            )
+            "#,
+        )
+        .await
+        .unwrap();
+
+    println!("{:#?}", df.schema());
+    df.clone().show_limit(10).await.unwrap();
+
+    let tempdir = tempfile::tempdir().unwrap();
+    df.write_parquet(&format!("{}/foo", tempdir.path().display()), None)
+        .await
+        .unwrap();
+}

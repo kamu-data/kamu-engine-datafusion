@@ -9,7 +9,7 @@ TBD
 
 
 ## Known Issues
-TBD
+- [UNION ALL schema harmonization failure in subquery/view](https://github.com/apache/arrow-datafusion/issues/6463)
 
 
 ## Developing
