@@ -13,8 +13,6 @@ use internal_error::*;
 use opendatafabric::engine::ExecuteQueryError;
 use opendatafabric::*;
 
-use crate::datafusion_hacks::ListingTableOfFiles;
-
 /////////////////////////////////////////////////////////////////////////////////////////
 
 pub struct Engine {}
@@ -30,8 +28,8 @@ impl Engine {
         &self,
         request: ExecuteQueryRequest,
     ) -> Result<ExecuteQueryResponseSuccess, ExecuteQueryError> {
-        let Transform::Sql(transform) = request.transform;
-        let transform = transform.normalize_queries();
+        let Transform::Sql(transform) = request.transform.clone();
+        let transform = transform.normalize_queries(Some(request.dataset_name.to_string()));
         let vocab = DatasetVocabularyResolved::from(&request.vocab);
 
         let cfg = SessionConfig::new()
@@ -43,52 +41,12 @@ impl Engine {
 
         // Setup inputs
         for input in &request.inputs {
-            let table = ListingTableOfFiles::try_new(
-                // TODO: Is state snapshotting correct?
-                &ctx.state(),
-                input
-                    .data_paths
-                    .iter()
-                    .map(|p| p.to_string_lossy().into())
-                    .collect(),
-            )
-            .await
-            .int_err()?;
-
-            ctx.register_table(
-                TableReference::bare(input.dataset_name.as_str()),
-                Arc::new(table),
-            )
-            .int_err()?;
+            Self::register_input(&ctx, input).await.int_err()?;
         }
 
         // Setup queries
-        for step in transform.queries.unwrap() {
-            let logical_plan = match ctx.state().create_logical_plan(&step.query).await {
-                Ok(plan) => plan,
-                Err(error) => {
-                    tracing::debug!(?error, query = %step.query, "Error when setting up query");
-                    return Err(ExecuteQueryResponseInvalidQuery {
-                        message: error.to_string(),
-                    }
-                    .into());
-                }
-            };
-
-            let view_name = if let Some(alias) = &step.alias {
-                alias.as_str()
-            } else {
-                request.dataset_name.as_str()
-            };
-
-            let create_view = LogicalPlan::Ddl(DdlStatement::CreateView(CreateView {
-                name: TableReference::bare(view_name).to_owned_reference(),
-                input: Arc::new(logical_plan),
-                or_replace: false,
-                definition: Some(step.query),
-            }));
-
-            ctx.execute_logical_plan(create_view).await.int_err()?;
+        for step in transform.queries.as_ref().unwrap() {
+            Self::register_view_for_step(&ctx, step).await?;
         }
 
         let df = ctx
@@ -102,21 +60,11 @@ impl Engine {
             .await
             .int_err()?;
 
-        // TODO: compression
         let num_rows = Self::write_parquet_single_file(df, &request.out_data_path)
             .await
             .int_err()?;
 
-        // Compute output watermark as minimum of all inputs
-        // This will change when we add support for aggregation, joins and other
-        // streaming operations
-        let output_watermark = request
-            .inputs
-            .iter()
-            .flat_map(|i| i.explicit_watermarks.iter())
-            .map(|wm| &wm.event_time)
-            .min()
-            .map(|dt| dt.clone());
+        let output_watermark = Self::compute_output_watermark(&request);
 
         if num_rows == 0 {
             Ok(ExecuteQueryResponseSuccess {
@@ -132,6 +80,78 @@ impl Engine {
                 output_watermark,
             })
         }
+    }
+
+    async fn register_input(
+        ctx: &SessionContext,
+        input: &ExecuteQueryInput,
+    ) -> Result<(), DataFusionError> {
+        let input_files: Vec<_> = input
+            .data_paths
+            .iter()
+            .map(|p| {
+                assert!(p.is_absolute());
+                p.to_str().unwrap().to_string()
+            })
+            .collect();
+
+        let df = ctx
+            .read_parquet(
+                input_files,
+                ParquetReadOptions {
+                    file_extension: "",
+                    table_partition_cols: Vec::new(),
+                    parquet_pruning: None,
+                    skip_metadata: None,
+                },
+            )
+            .await?;
+
+        ctx.register_table(
+            TableReference::bare(input.dataset_name.as_str()),
+            df.into_view(),
+        )?;
+
+        Ok(())
+    }
+
+    async fn register_view_for_step(
+        ctx: &SessionContext,
+        step: &SqlQueryStep,
+    ) -> Result<(), ExecuteQueryError> {
+        let logical_plan = match ctx.state().create_logical_plan(&step.query).await {
+            Ok(plan) => plan,
+            Err(error) => {
+                tracing::debug!(?error, query = %step.query, "Error when setting up query");
+                return Err(ExecuteQueryResponseInvalidQuery {
+                    message: error.to_string(),
+                }
+                .into());
+            }
+        };
+
+        let create_view = LogicalPlan::Ddl(DdlStatement::CreateView(CreateView {
+            name: TableReference::bare(step.alias.as_ref().unwrap()).to_owned_reference(),
+            input: Arc::new(logical_plan),
+            or_replace: false,
+            definition: Some(step.query.clone()),
+        }));
+
+        ctx.execute_logical_plan(create_view).await.int_err()?;
+        Ok(())
+    }
+
+    // Computes output watermark as minimum of all inputs
+    // This will change when we add support for aggregation, joins and other
+    // streaming operations
+    fn compute_output_watermark(request: &ExecuteQueryRequest) -> Option<DateTime<Utc>> {
+        request
+            .inputs
+            .iter()
+            .flat_map(|i| i.explicit_watermarks.iter())
+            .map(|wm| &wm.event_time)
+            .min()
+            .map(|dt| dt.clone())
     }
 
     fn validate_raw_result(
