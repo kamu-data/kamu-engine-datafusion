@@ -22,8 +22,6 @@ impl Engine {
         Self {}
     }
 
-    // TODO: Error handling
-    // TODO: Isolate from GRPC protocol with proper result/error types
     pub async fn execute_query(
         &self,
         request: ExecuteQueryRequest,
@@ -107,6 +105,12 @@ impl Engine {
             )
             .await?;
 
+        tracing::info!(
+            name = %input.dataset_name,
+            schema = ?df.schema(),
+            "Registering input",
+        );
+
         ctx.register_table(
             TableReference::bare(input.dataset_name.as_str()),
             df.into_view(),
@@ -119,6 +123,14 @@ impl Engine {
         ctx: &SessionContext,
         step: &SqlQueryStep,
     ) -> Result<(), ExecuteQueryError> {
+        let name = step.alias.as_ref().unwrap();
+
+        tracing::info!(
+            %name,
+            query = %step.query,
+            "Creating view for a query",
+        );
+
         let logical_plan = match ctx.state().create_logical_plan(&step.query).await {
             Ok(plan) => plan,
             Err(error) => {
@@ -145,20 +157,24 @@ impl Engine {
     // This will change when we add support for aggregation, joins and other
     // streaming operations
     fn compute_output_watermark(request: &ExecuteQueryRequest) -> Option<DateTime<Utc>> {
-        request
+        let watermark = request
             .inputs
             .iter()
             .flat_map(|i| i.explicit_watermarks.iter())
             .map(|wm| &wm.event_time)
             .min()
-            .map(|dt| dt.clone())
+            .map(|dt| dt.clone());
+
+        tracing::info!(?watermark, "Computed ouptut watermark");
+
+        watermark
     }
 
     fn validate_raw_result(
         df: &DataFrame,
         vocab: &DatasetVocabularyResolved<'_>,
     ) -> Result<(), ExecuteQueryError> {
-        tracing::info!(schema = ?df.schema(), "Raw result schema computed");
+        tracing::info!(schema = ?df.schema(), "Computed raw result schema");
 
         let system_columns = [&vocab.offset_column, &vocab.system_time_column];
         for system_column in system_columns {
@@ -267,12 +283,14 @@ impl Engine {
 
         let df = df.select_columns(&full_columns_str)?;
 
-        tracing::info!(schema = ?df.schema(), "Final result schema formed");
+        tracing::info!(schema = ?df.schema(), "Computed final result schema");
         Ok(df)
     }
 
     async fn write_parquet_single_file(df: DataFrame, path: &Path) -> Result<i64, DataFusionError> {
         use datafusion::parquet::file::reader::{FileReader, SerializedFileReader};
+
+        tracing::info!(?path, "Writing result to parquet");
 
         // Produces a directory of "part-X.parquet" files
         // We configure to only produce one partition
@@ -291,15 +309,22 @@ impl Engine {
         std::fs::rename(tmp_path, path)?;
 
         // Read file back and use metadata to understand how many rows were written
-        // TODO: Is this the most performant way to do this or should we cache DF in
-        // memory?
         let reader = SerializedFileReader::new(std::fs::File::open(path).unwrap()).unwrap();
-        let num_rows: i64 = reader
-            .metadata()
-            .row_groups()
-            .iter()
-            .map(|rg| rg.num_rows())
-            .sum();
+
+        let metadata = reader.metadata();
+        let num_rows: i64 = reader.metadata().file_metadata().num_rows();
+
+        // Print metadata for debugging
+        let metadata = {
+            let mut metadata_buf = Vec::new();
+            datafusion::parquet::schema::printer::print_parquet_metadata(
+                &mut metadata_buf,
+                metadata,
+            );
+            String::from_utf8(metadata_buf).unwrap()
+        };
+
+        tracing::info!(%metadata, num_rows, "Wrote data to parquet file");
 
         if num_rows == 0 {
             std::fs::remove_file(path)?;

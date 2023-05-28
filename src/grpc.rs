@@ -14,7 +14,6 @@ use opendatafabric::serde::{EngineProtocolDeserializer, EngineProtocolSerializer
 use opendatafabric::{ExecuteQueryResponse, ExecuteQueryResponseInternalError};
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Request, Response, Status};
-use tracing::info;
 
 use crate::engine::Engine;
 
@@ -68,18 +67,16 @@ impl EngineGRPCImpl {
 impl EngineGRPC for EngineGRPCImpl {
     type ExecuteQueryStream = ReceiverStream<Result<ExecuteQueryResponseGRPC, Status>>;
 
+    #[tracing::instrument(level = "info", skip_all)]
     async fn execute_query(
         &self,
         request_grpc: Request<ExecuteQueryRequestGRPC>,
     ) -> Result<Response<Self::ExecuteQueryStream>, Status> {
-        let span = tracing::span!(tracing::Level::INFO, "execute_query");
-        let _enter = span.enter();
-
         let request = FlatbuffersEngineProtocol
             .read_execute_query_request(&request_grpc.get_ref().flatbuffer)
             .unwrap();
 
-        info!(message = "Got request", request = ?request);
+        tracing::info!(?request, "Got request");
 
         let (tx, rx) = tokio::sync::mpsc::channel(1);
 
@@ -98,6 +95,8 @@ impl EngineGRPC for EngineGRPCImpl {
                     ExecuteQueryResponse::InternalError(Self::into_serializable_error(err))
                 }
             };
+
+            tracing::info!(?response, "Produced response");
 
             let response_fb = FlatbuffersEngineProtocol
                 .write_execute_query_response(&response)
