@@ -7,6 +7,8 @@ use kamu_engine_datafusion::engine::Engine;
 use opendatafabric::engine::ExecuteQueryError;
 use opendatafabric::*;
 
+///////////////////////////////////////////////////////////////////////////////
+
 fn write_sample_data(path: impl AsRef<Path>) {
     use datafusion::arrow::array;
     use datafusion::arrow::datatypes::{DataType, Field, Schema, TimeUnit};
@@ -20,12 +22,12 @@ fn write_sample_data(path: impl AsRef<Path>) {
         ),
         Field::new(
             DatasetVocabulary::DEFAULT_SYSTEM_TIME_COLUMN_NAME,
-            DataType::Timestamp(TimeUnit::Millisecond, None),
+            DataType::Timestamp(TimeUnit::Millisecond, Some("UTC".into())),
             false,
         ),
         Field::new(
             DatasetVocabulary::DEFAULT_EVENT_TIME_COLUMN_NAME,
-            DataType::Timestamp(TimeUnit::Millisecond, None),
+            DataType::Timestamp(TimeUnit::Millisecond, Some("UTC".into())),
             false,
         ),
         Field::new("city", DataType::Utf8, false),
@@ -43,14 +45,14 @@ fn write_sample_data(path: impl AsRef<Path>) {
         schema,
         vec![
             Arc::new(array::Int64Array::from(vec![0, 1, 2])),
-            Arc::new(array::TimestampMillisecondArray::from(vec![
-                system_time,
-                system_time,
-                system_time,
-            ])),
-            Arc::new(array::TimestampMillisecondArray::from(vec![
-                event_time, event_time, event_time,
-            ])),
+            Arc::new(
+                array::TimestampMillisecondArray::from(vec![system_time, system_time, system_time])
+                    .with_timezone("UTC"),
+            ),
+            Arc::new(
+                array::TimestampMillisecondArray::from(vec![event_time, event_time, event_time])
+                    .with_timezone("UTC"),
+            ),
             Arc::new(array::StringArray::from(vec![
                 "vancouver",
                 "seattle",
@@ -74,6 +76,8 @@ fn write_sample_data(path: impl AsRef<Path>) {
     arrow_writer.close().unwrap();
 }
 
+///////////////////////////////////////////////////////////////////////////////
+
 async fn read_data_pretty(path: impl AsRef<Path>) -> String {
     use datafusion::arrow::util::pretty;
     use datafusion::prelude::*;
@@ -93,14 +97,37 @@ async fn read_data_pretty(path: impl AsRef<Path>) -> String {
     pretty::pretty_format_batches(&batches).unwrap().to_string()
 }
 
+///////////////////////////////////////////////////////////////////////////////
+
+async fn read_parquet_schema_pretty(path: impl AsRef<Path>) -> String {
+    use datafusion::parquet::file::reader::{FileReader, SerializedFileReader};
+
+    let reader = SerializedFileReader::new(std::fs::File::open(path).unwrap()).unwrap();
+    let metadata = reader.metadata();
+    let schema = metadata.file_metadata().schema();
+
+    let schema = {
+        let mut buf = Vec::new();
+        datafusion::parquet::schema::printer::print_schema(&mut buf, schema);
+        String::from_utf8(buf).unwrap()
+    };
+
+    schema
+}
+
+///////////////////////////////////////////////////////////////////////////////
+
 #[derive(Default)]
 struct TestQueryCommonOpts {
     queries: Option<Vec<SqlQueryStep>>,
     mutate_request: Option<Box<dyn FnOnce(ExecuteQueryRequest) -> ExecuteQueryRequest>>,
     check_result: Option<Box<dyn FnOnce(Result<ExecuteQueryResponseSuccess, ExecuteQueryError>)>>,
     expected_data: Option<Option<&'static str>>,
+    expected_schema: Option<&'static str>,
     expected_watermark: Option<Option<DateTime<Utc>>>,
 }
+
+///////////////////////////////////////////////////////////////////////////////
 
 async fn test_query_common(opts: TestQueryCommonOpts) {
     // Test defaults
@@ -110,13 +137,13 @@ async fn test_query_common(opts: TestQueryCommonOpts) {
     }]);
     let expected_data = opts.expected_data.unwrap_or(Some(
         r#"
-+--------+---------------------+---------------------+-----------+------------+
-| offset | system_time         | event_time          | city      | population |
-+--------+---------------------+---------------------+-----------+------------+
-| 0      | 2023-03-01T00:00:00 | 2023-01-01T00:00:00 | vancouver | 675100     |
-| 1      | 2023-03-01T00:00:00 | 2023-01-01T00:00:00 | seattle   | 733100     |
-| 2      | 2023-03-01T00:00:00 | 2023-01-01T00:00:00 | kyiv      | 2884100    |
-+--------+---------------------+---------------------+-----------+------------+
++--------+----------------------+----------------------+-----------+------------+
+| offset | system_time          | event_time           | city      | population |
++--------+----------------------+----------------------+-----------+------------+
+| 0      | 2023-03-01T00:00:00Z | 2023-01-01T00:00:00Z | vancouver | 675100     |
+| 1      | 2023-03-01T00:00:00Z | 2023-01-01T00:00:00Z | seattle   | 733100     |
+| 2      | 2023-03-01T00:00:00Z | 2023-01-01T00:00:00Z | kyiv      | 2884100    |
++--------+----------------------+----------------------+-----------+------------+
         "#,
     ));
 
@@ -183,7 +210,35 @@ async fn test_query_common(opts: TestQueryCommonOpts) {
     } else {
         assert!(!output_data_path.exists());
     }
+
+    if let Some(expected_schema) = opts.expected_schema {
+        let actual_schema = read_parquet_schema_pretty(&output_data_path).await;
+        assert_eq!(actual_schema.trim(), expected_schema.trim());
+    }
 }
+
+///////////////////////////////////////////////////////////////////////////////
+
+#[test_log::test(tokio::test)]
+async fn test_result_schema() {
+    test_query_common(TestQueryCommonOpts {
+        expected_schema: Some(
+            r#"
+message arrow_schema {
+  REQUIRED INT64 offset;
+  REQUIRED INT64 system_time (TIMESTAMP(MILLIS,true));
+  REQUIRED INT64 event_time (TIMESTAMP(MILLIS,true));
+  REQUIRED BYTE_ARRAY city (STRING);
+  REQUIRED INT64 population;
+}
+            "#,
+        ),
+        ..Default::default()
+    })
+    .await
+}
+
+///////////////////////////////////////////////////////////////////////////////
 
 #[test_log::test(tokio::test)]
 async fn test_chain_of_queries() {
@@ -201,19 +256,21 @@ async fn test_chain_of_queries() {
         ]),
         expected_data: Some(Some(
             r#"
-+--------+---------------------+---------------------+-----------+------------+
-| offset | system_time         | event_time          | city      | population |
-+--------+---------------------+---------------------+-----------+------------+
-| 0      | 2023-03-01T00:00:00 | 2023-01-01T00:00:00 | vancouver | 675150     |
-| 1      | 2023-03-01T00:00:00 | 2023-01-01T00:00:00 | seattle   | 733150     |
-| 2      | 2023-03-01T00:00:00 | 2023-01-01T00:00:00 | kyiv      | 2884150    |
-+--------+---------------------+---------------------+-----------+------------+
++--------+----------------------+----------------------+-----------+------------+
+| offset | system_time          | event_time           | city      | population |
++--------+----------------------+----------------------+-----------+------------+
+| 0      | 2023-03-01T00:00:00Z | 2023-01-01T00:00:00Z | vancouver | 675150     |
+| 1      | 2023-03-01T00:00:00Z | 2023-01-01T00:00:00Z | seattle   | 733150     |
+| 2      | 2023-03-01T00:00:00Z | 2023-01-01T00:00:00Z | kyiv      | 2884150    |
++--------+----------------------+----------------------+-----------+------------+
             "#,
         )),
         ..Default::default()
     })
     .await
 }
+
+///////////////////////////////////////////////////////////////////////////////
 
 #[test_log::test(tokio::test)]
 async fn test_propagates_input_watermark() {
@@ -234,6 +291,8 @@ async fn test_propagates_input_watermark() {
     })
     .await
 }
+
+///////////////////////////////////////////////////////////////////////////////
 
 #[test_log::test(tokio::test)]
 async fn test_empty_result() {
@@ -256,6 +315,8 @@ async fn test_empty_result() {
     })
     .await
 }
+
+///////////////////////////////////////////////////////////////////////////////
 
 #[test_log::test(tokio::test)]
 async fn test_empty_input() {
@@ -280,6 +341,8 @@ async fn test_empty_input() {
     .await
 }
 
+///////////////////////////////////////////////////////////////////////////////
+
 #[test_log::test(tokio::test)]
 async fn test_partial_input() {
     test_query_common(TestQueryCommonOpts {
@@ -298,17 +361,19 @@ async fn test_partial_input() {
         })),
         expected_data: Some(Some(
             r#"
-+--------+---------------------+---------------------+---------+------------+
-| offset | system_time         | event_time          | city    | population |
-+--------+---------------------+---------------------+---------+------------+
-| 0      | 2023-03-01T00:00:00 | 2023-01-01T00:00:00 | seattle | 733100     |
-+--------+---------------------+---------------------+---------+------------+
++--------+----------------------+----------------------+---------+------------+
+| offset | system_time          | event_time           | city    | population |
++--------+----------------------+----------------------+---------+------------+
+| 0      | 2023-03-01T00:00:00Z | 2023-01-01T00:00:00Z | seattle | 733100     |
++--------+----------------------+----------------------+---------+------------+
             "#,
         )),
         ..Default::default()
     })
     .await
 }
+
+///////////////////////////////////////////////////////////////////////////////
 
 #[test_log::test(tokio::test)]
 async fn test_output_offset() {
@@ -328,19 +393,21 @@ async fn test_output_offset() {
         })),
         expected_data: Some(Some(
             r#"
-+--------+---------------------+---------------------+-----------+------------+
-| offset | system_time         | event_time          | city      | population |
-+--------+---------------------+---------------------+-----------+------------+
-| 10     | 2023-03-01T00:00:00 | 2023-01-01T00:00:00 | vancouver | 675100     |
-| 11     | 2023-03-01T00:00:00 | 2023-01-01T00:00:00 | seattle   | 733100     |
-| 12     | 2023-03-01T00:00:00 | 2023-01-01T00:00:00 | kyiv      | 2884100    |
-+--------+---------------------+---------------------+-----------+------------+
++--------+----------------------+----------------------+-----------+------------+
+| offset | system_time          | event_time           | city      | population |
++--------+----------------------+----------------------+-----------+------------+
+| 10     | 2023-03-01T00:00:00Z | 2023-01-01T00:00:00Z | vancouver | 675100     |
+| 11     | 2023-03-01T00:00:00Z | 2023-01-01T00:00:00Z | seattle   | 733100     |
+| 12     | 2023-03-01T00:00:00Z | 2023-01-01T00:00:00Z | kyiv      | 2884100    |
++--------+----------------------+----------------------+-----------+------------+
             "#,
         )),
         ..Default::default()
     })
     .await
 }
+
+///////////////////////////////////////////////////////////////////////////////
 
 #[test_log::test(tokio::test)]
 async fn test_bad_sql() {
@@ -358,6 +425,8 @@ async fn test_bad_sql() {
     .await
 }
 
+///////////////////////////////////////////////////////////////////////////////
+
 #[test_log::test(tokio::test)]
 async fn test_event_time_as_date() {
     test_query_common(TestQueryCommonOpts {
@@ -368,19 +437,21 @@ async fn test_event_time_as_date() {
         }]),
         expected_data: Some(Some(
             r#"
-+--------+---------------------+------------+-----------+------------+
-| offset | system_time         | event_time | city      | population |
-+--------+---------------------+------------+-----------+------------+
-| 0      | 2023-03-01T00:00:00 | 2023-01-01 | vancouver | 675000     |
-| 1      | 2023-03-01T00:00:00 | 2023-01-01 | seattle   | 733000     |
-| 2      | 2023-03-01T00:00:00 | 2023-01-01 | kyiv      | 2884000    |
-+--------+---------------------+------------+-----------+------------+
++--------+----------------------+------------+-----------+------------+
+| offset | system_time          | event_time | city      | population |
++--------+----------------------+------------+-----------+------------+
+| 0      | 2023-03-01T00:00:00Z | 2023-01-01 | vancouver | 675000     |
+| 1      | 2023-03-01T00:00:00Z | 2023-01-01 | seattle   | 733000     |
+| 2      | 2023-03-01T00:00:00Z | 2023-01-01 | kyiv      | 2884000    |
++--------+----------------------+------------+-----------+------------+
             "#,
         )),
         ..Default::default()
     })
     .await
 }
+
+///////////////////////////////////////////////////////////////////////////////
 
 #[test_log::test(tokio::test)]
 async fn test_event_time_as_invalid_type() {
@@ -397,6 +468,8 @@ async fn test_event_time_as_invalid_type() {
     })
     .await
 }
+
+///////////////////////////////////////////////////////////////////////////////
 
 // FIXME: https://github.com/apache/arrow-datafusion/issues/6463
 #[test_log::test(tokio::test)]

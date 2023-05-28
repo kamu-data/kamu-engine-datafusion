@@ -8,6 +8,7 @@ use datafusion::logical_expr as expr;
 use datafusion::logical_expr::expr::WindowFunction;
 use datafusion::logical_expr::{CreateView, DdlStatement, LogicalPlan};
 use datafusion::prelude::*;
+use datafusion::scalar::ScalarValue;
 use datafusion::sql::TableReference;
 use internal_error::*;
 use opendatafabric::engine::ExecuteQueryError;
@@ -224,12 +225,39 @@ impl Engine {
 
         if let Some(event_time_col) = event_time_col {
             match event_time_col.data_type() {
-                DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, _) => {}
+                DataType::Date32 | DataType::Date64 => {}
+                DataType::Timestamp(_, None) => {
+                    return Err(ExecuteQueryResponseInvalidQuery {
+                        message: format!(
+                            "Event time column '{}' should be adjusted to UTC, but local/naive \
+                             timestamp found",
+                            vocab.event_time_column
+                        ),
+                    }
+                    .into());
+                }
+                DataType::Timestamp(_, Some(tz)) => match tz as &str {
+                    "+00:00" | "UTC" => {}
+                    tz => {
+                        // TODO: Is this restriction necessary?
+                        // Datafusion has very sane (metadata-only) approach to storing timezones.
+                        // The fear currently is about compatibility with engines like Spark/Flink
+                        // that might interpret it incorrectly. This has to be tested further.
+                        return Err(ExecuteQueryResponseInvalidQuery {
+                            message: format!(
+                                "Event time column '{}' should be adjusted to UTC, but found: {}",
+                                vocab.event_time_column, tz
+                            ),
+                        }
+                        .into());
+                    }
+                },
                 typ => {
                     return Err(ExecuteQueryResponseInvalidQuery {
                         message: format!(
-                            "Event time column should be either Date or Timestamp, found: {}",
-                            typ
+                            "Event time column '{}' should be either Date or Timestamp, but \
+                             found: {}",
+                            vocab.event_time_column, typ
                         ),
                     }
                     .into());
@@ -294,7 +322,10 @@ impl Engine {
 
         let df = df.with_column(
             &vocab.system_time_column,
-            lit_timestamp_nano(system_time.timestamp_nanos()),
+            Expr::Literal(ScalarValue::TimestampMillisecond(
+                Some(system_time.timestamp_millis()),
+                Some("UTC".into()),
+            )),
         )?;
 
         // Reorder columns for nice looks
