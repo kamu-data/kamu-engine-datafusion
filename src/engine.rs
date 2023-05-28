@@ -47,6 +47,7 @@ impl Engine {
             Self::register_view_for_step(&ctx, step).await?;
         }
 
+        // Get result's execution plan
         let df = ctx
             .table(TableReference::bare(request.dataset_name.as_str()))
             .await
@@ -84,8 +85,22 @@ impl Engine {
         ctx: &SessionContext,
         input: &ExecuteQueryInput,
     ) -> Result<(), DataFusionError> {
-        let input_files: Vec<_> = input
-            .data_paths
+        assert!(
+            (input.data_paths.is_empty() && input.data_interval.is_none())
+                || (!input.data_paths.is_empty() && input.data_interval.is_some())
+        );
+
+        // The input might not have any data to read - in this case we use the schema
+        // file as an input but will filter out all rows from it so it acts as
+        // an empty table but with correct schema
+        let data_fallback = [input.schema_file.clone()];
+        let data_paths = if input.data_paths.is_empty() {
+            &data_fallback
+        } else {
+            &input.data_paths[..]
+        };
+
+        let input_files: Vec<_> = data_paths
             .iter()
             .map(|p| {
                 assert!(p.is_absolute());
@@ -110,6 +125,16 @@ impl Engine {
             schema = ?df.schema(),
             "Registering input",
         );
+
+        let vocab = DatasetVocabularyResolved::from(&input.vocab);
+        let df = if let Some(offset_interval) = &input.data_interval {
+            df.filter(and(
+                col(&vocab.offset_column as &str).gt_eq(lit(offset_interval.start)),
+                col(&vocab.offset_column as &str).lt_eq(lit(offset_interval.end)),
+            ))?
+        } else {
+            df.filter(lit(false))?
+        };
 
         ctx.register_table(
             TableReference::bare(input.dataset_name.as_str()),

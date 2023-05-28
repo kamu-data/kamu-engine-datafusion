@@ -113,9 +113,9 @@ async fn test_query_common(opts: TestQueryCommonOpts) {
 +--------+---------------------+---------------------+-----------+------------+
 | offset | system_time         | event_time          | city      | population |
 +--------+---------------------+---------------------+-----------+------------+
-| 10     | 2023-03-01T00:00:00 | 2023-01-01T00:00:00 | vancouver | 675100     |
-| 11     | 2023-03-01T00:00:00 | 2023-01-01T00:00:00 | seattle   | 733100     |
-| 12     | 2023-03-01T00:00:00 | 2023-01-01T00:00:00 | kyiv      | 2884100    |
+| 0      | 2023-03-01T00:00:00 | 2023-01-01T00:00:00 | vancouver | 675100     |
+| 1      | 2023-03-01T00:00:00 | 2023-01-01T00:00:00 | seattle   | 733100     |
+| 2      | 2023-03-01T00:00:00 | 2023-01-01T00:00:00 | kyiv      | 2884100    |
 +--------+---------------------+---------------------+-----------+------------+
         "#,
     ));
@@ -135,7 +135,7 @@ async fn test_query_common(opts: TestQueryCommonOpts) {
         system_time: DateTime::parse_from_rfc3339("2023-03-01T00:00:00Z")
             .unwrap()
             .into(),
-        offset: 10,
+        offset: 0,
         vocab: DatasetVocabulary::default(),
         transform: Transform::Sql(TransformSql {
             engine: "datafusion".into(),
@@ -171,7 +171,7 @@ async fn test_query_common(opts: TestQueryCommonOpts) {
         assert_eq!(
             actual_result.unwrap(),
             ExecuteQueryResponseSuccess {
-                data_interval: Some(OffsetInterval { start: 10, end: 12 }),
+                data_interval: Some(OffsetInterval { start: 0, end: 2 }),
                 output_watermark: opts.expected_watermark.unwrap_or(None),
             }
         );
@@ -204,9 +204,9 @@ async fn test_chain_of_queries() {
 +--------+---------------------+---------------------+-----------+------------+
 | offset | system_time         | event_time          | city      | population |
 +--------+---------------------+---------------------+-----------+------------+
-| 10     | 2023-03-01T00:00:00 | 2023-01-01T00:00:00 | vancouver | 675150     |
-| 11     | 2023-03-01T00:00:00 | 2023-01-01T00:00:00 | seattle   | 733150     |
-| 12     | 2023-03-01T00:00:00 | 2023-01-01T00:00:00 | kyiv      | 2884150    |
+| 0      | 2023-03-01T00:00:00 | 2023-01-01T00:00:00 | vancouver | 675150     |
+| 1      | 2023-03-01T00:00:00 | 2023-01-01T00:00:00 | seattle   | 733150     |
+| 2      | 2023-03-01T00:00:00 | 2023-01-01T00:00:00 | kyiv      | 2884150    |
 +--------+---------------------+---------------------+-----------+------------+
             "#,
         )),
@@ -258,6 +258,91 @@ async fn test_empty_result() {
 }
 
 #[test_log::test(tokio::test)]
+async fn test_empty_input() {
+    test_query_common(TestQueryCommonOpts {
+        mutate_request: Some(Box::new(|mut r| {
+            r.inputs[0].data_interval = None;
+            r.inputs[0].data_paths = Vec::new();
+            r
+        })),
+        check_result: Some(Box::new(|res| {
+            assert_eq!(
+                res.unwrap(),
+                ExecuteQueryResponseSuccess {
+                    data_interval: None,
+                    output_watermark: None,
+                }
+            )
+        })),
+        expected_data: Some(None),
+        ..Default::default()
+    })
+    .await
+}
+
+#[test_log::test(tokio::test)]
+async fn test_partial_input() {
+    test_query_common(TestQueryCommonOpts {
+        mutate_request: Some(Box::new(|mut r| {
+            r.inputs[0].data_interval = Some(OffsetInterval { start: 1, end: 1 });
+            r
+        })),
+        check_result: Some(Box::new(|res| {
+            assert_eq!(
+                res.unwrap(),
+                ExecuteQueryResponseSuccess {
+                    data_interval: Some(OffsetInterval { start: 0, end: 0 }),
+                    output_watermark: None,
+                }
+            )
+        })),
+        expected_data: Some(Some(
+            r#"
++--------+---------------------+---------------------+---------+------------+
+| offset | system_time         | event_time          | city    | population |
++--------+---------------------+---------------------+---------+------------+
+| 0      | 2023-03-01T00:00:00 | 2023-01-01T00:00:00 | seattle | 733100     |
++--------+---------------------+---------------------+---------+------------+
+            "#,
+        )),
+        ..Default::default()
+    })
+    .await
+}
+
+#[test_log::test(tokio::test)]
+async fn test_output_offset() {
+    test_query_common(TestQueryCommonOpts {
+        mutate_request: Some(Box::new(|mut r| {
+            r.offset = 10;
+            r
+        })),
+        check_result: Some(Box::new(|res| {
+            assert_eq!(
+                res.unwrap(),
+                ExecuteQueryResponseSuccess {
+                    data_interval: Some(OffsetInterval { start: 10, end: 12 }),
+                    output_watermark: None,
+                }
+            )
+        })),
+        expected_data: Some(Some(
+            r#"
++--------+---------------------+---------------------+-----------+------------+
+| offset | system_time         | event_time          | city      | population |
++--------+---------------------+---------------------+-----------+------------+
+| 10     | 2023-03-01T00:00:00 | 2023-01-01T00:00:00 | vancouver | 675100     |
+| 11     | 2023-03-01T00:00:00 | 2023-01-01T00:00:00 | seattle   | 733100     |
+| 12     | 2023-03-01T00:00:00 | 2023-01-01T00:00:00 | kyiv      | 2884100    |
++--------+---------------------+---------------------+-----------+------------+
+            "#,
+        )),
+        ..Default::default()
+    })
+    .await
+}
+
+#[test_log::test(tokio::test)]
 async fn test_bad_sql() {
     test_query_common(TestQueryCommonOpts {
         queries: Some(vec![SqlQueryStep {
@@ -286,9 +371,9 @@ async fn test_event_time_as_date() {
 +--------+---------------------+------------+-----------+------------+
 | offset | system_time         | event_time | city      | population |
 +--------+---------------------+------------+-----------+------------+
-| 10     | 2023-03-01T00:00:00 | 2023-01-01 | vancouver | 675000     |
-| 11     | 2023-03-01T00:00:00 | 2023-01-01 | seattle   | 733000     |
-| 12     | 2023-03-01T00:00:00 | 2023-01-01 | kyiv      | 2884000    |
+| 0      | 2023-03-01T00:00:00 | 2023-01-01 | vancouver | 675000     |
+| 1      | 2023-03-01T00:00:00 | 2023-01-01 | seattle   | 733000     |
+| 2      | 2023-03-01T00:00:00 | 2023-01-01 | kyiv      | 2884000    |
 +--------+---------------------+------------+-----------+------------+
             "#,
         )),
