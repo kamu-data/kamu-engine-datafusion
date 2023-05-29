@@ -119,6 +119,7 @@ async fn read_parquet_schema_pretty(path: impl AsRef<Path>) -> String {
 
 #[derive(Default)]
 struct TestQueryCommonOpts {
+    write_input_data: Option<Box<dyn FnOnce(&Path)>>,
     queries: Option<Vec<SqlQueryStep>>,
     mutate_request: Option<Box<dyn FnOnce(ExecuteQueryRequest) -> ExecuteQueryRequest>>,
     check_result: Option<Box<dyn FnOnce(Result<ExecuteQueryResponseSuccess, ExecuteQueryError>)>>,
@@ -152,7 +153,12 @@ async fn test_query_common(opts: TestQueryCommonOpts) {
 
     let output_data_path = tempdir.path().join("output");
     let input_data_path = tempdir.path().join("input");
-    write_sample_data(&input_data_path);
+
+    if let Some(write_input_data) = opts.write_input_data {
+        write_input_data(&input_data_path);
+    } else {
+        write_sample_data(&input_data_path);
+    }
 
     let engine = Engine::new().await;
 
@@ -474,16 +480,20 @@ async fn test_event_time_as_invalid_type() {
 // FIXME: https://github.com/apache/arrow-datafusion/issues/6463
 #[test_log::test(tokio::test)]
 #[should_panic]
-async fn test_issues_6463() {
+async fn test_issues_datafusion_6463() {
     use datafusion::prelude::*;
     let ctx = SessionContext::new();
 
-    ctx.register_parquet("ab", "data/alberta.parquet", ParquetReadOptions::default())
-        .await
-        .unwrap();
+    ctx.register_parquet(
+        "ab",
+        "data/datafusion-issue-6463/alberta.parquet",
+        ParquetReadOptions::default(),
+    )
+    .await
+    .unwrap();
     ctx.register_parquet(
         "bc",
-        "data/british-columbia.parquet",
+        "data/datafusion-issue-6463/british-columbia.parquet",
         ParquetReadOptions::default(),
     )
     .await
@@ -521,4 +531,34 @@ async fn test_issues_6463() {
     df.write_parquet(&format!("{}/foo", tempdir.path().display()), None)
         .await
         .unwrap();
+}
+
+///////////////////////////////////////////////////////////////////////////////
+
+// FIXME: https://github.com/apache/arrow-rs/issues/4308
+#[test_log::test(tokio::test)]
+async fn test_issues_arrow_4308() {
+    use datafusion::arrow::datatypes::{DataType, TimeUnit};
+    use datafusion::prelude::*;
+
+    let ctx = SessionContext::new();
+
+    let df = ctx
+        .read_parquet(
+            "data/arrow-issue-4308/data.parquet",
+            ParquetReadOptions::default(),
+        )
+        .await
+        .unwrap();
+
+    let system_time_dt = df
+        .schema()
+        .field_with_unqualified_name("system_time")
+        .unwrap()
+        .data_type();
+
+    assert_eq!(
+        *system_time_dt,
+        DataType::Timestamp(TimeUnit::Millisecond, Some(Arc::from("UTC")))
+    );
 }

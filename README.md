@@ -9,6 +9,8 @@ TBD
 
 
 ## Known Issues
+- [Not following the spec for TIMESTAMP_MILLIS legacy converted types](https://github.com/apache/arrow-rs/issues/4308)
+  - Using patched version
 - [UNION ALL schema harmonization failure in subquery/view](https://github.com/apache/arrow-datafusion/issues/6463)
 
 

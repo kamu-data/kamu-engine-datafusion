@@ -7,6 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.1.2] - 2023-05-26
 ### Changed
 - Improved error handling
+- Using patched `arrow` / `parquet` version that reads `TIMESTAMP_MILLIS` type as UTC.
 
 ## [0.1.1] - 2023-05-25
 ### Changed

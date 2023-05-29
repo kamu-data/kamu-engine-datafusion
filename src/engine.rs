@@ -40,7 +40,7 @@ impl Engine {
 
         // Setup inputs
         for input in &request.inputs {
-            Self::register_input(&ctx, input).await.int_err()?;
+            Self::register_input(&ctx, input).await?;
         }
 
         // Setup queries
@@ -60,9 +60,7 @@ impl Engine {
             .await
             .int_err()?;
 
-        let num_rows = Self::write_parquet_single_file(df, &request.out_data_path)
-            .await
-            .int_err()?;
+        let num_rows = Self::write_parquet_single_file(df, &request.out_data_path).await?;
 
         let output_watermark = Self::compute_output_watermark(&request);
 
@@ -85,10 +83,28 @@ impl Engine {
     async fn register_input(
         ctx: &SessionContext,
         input: &ExecuteQueryInput,
-    ) -> Result<(), DataFusionError> {
+    ) -> Result<(), ExecuteQueryError> {
+        use datafusion::parquet::file::reader::{FileReader, SerializedFileReader};
+
         assert!(
             (input.data_paths.is_empty() && input.data_interval.is_none())
                 || (!input.data_paths.is_empty() && input.data_interval.is_some())
+        );
+
+        // Read raw parquet schema
+        // TODO: Use async reader?
+        let parquet_reader =
+            SerializedFileReader::new(std::fs::File::open(&input.schema_file).int_err()?)
+                .int_err()?;
+        let parquet_schema = parquet_reader.metadata().file_metadata().schema();
+        let mut parquet_schema_str = Vec::new();
+        datafusion::parquet::schema::printer::print_schema(&mut parquet_schema_str, parquet_schema);
+        let parquet_schema_str = String::from_utf8(parquet_schema_str).unwrap();
+
+        tracing::info!(
+            name = %input.dataset_name,
+            parquet_schema = %parquet_schema_str,
+            "Raw parquet input schema",
         );
 
         // The input might not have any data to read - in this case we use the schema
@@ -119,7 +135,8 @@ impl Engine {
                     skip_metadata: None,
                 },
             )
-            .await?;
+            .await
+            .int_err()?;
 
         tracing::info!(
             name = %input.dataset_name,
@@ -132,15 +149,17 @@ impl Engine {
             df.filter(and(
                 col(&vocab.offset_column as &str).gt_eq(lit(offset_interval.start)),
                 col(&vocab.offset_column as &str).lt_eq(lit(offset_interval.end)),
-            ))?
+            ))
+            .int_err()?
         } else {
-            df.filter(lit(false))?
+            df.filter(lit(false)).int_err()?
         };
 
         ctx.register_table(
             TableReference::bare(input.dataset_name.as_str()),
             df.into_view(),
-        )?;
+        )
+        .int_err()?;
 
         Ok(())
     }
@@ -343,7 +362,10 @@ impl Engine {
         Ok(df)
     }
 
-    async fn write_parquet_single_file(df: DataFrame, path: &Path) -> Result<i64, DataFusionError> {
+    async fn write_parquet_single_file(
+        df: DataFrame,
+        path: &Path,
+    ) -> Result<i64, ExecuteQueryError> {
         use datafusion::parquet::file::reader::{FileReader, SerializedFileReader};
 
         tracing::info!(?path, "Writing result to parquet");
@@ -351,7 +373,8 @@ impl Engine {
         // Produces a directory of "part-X.parquet" files
         // We configure to only produce one partition
         df.write_parquet(path.as_os_str().to_str().unwrap(), None)
-            .await?;
+            .await
+            .int_err()?;
 
         assert_eq!(
             1,
@@ -360,12 +383,12 @@ impl Engine {
         );
 
         let tmp_path = path.with_extension("tmp");
-        std::fs::rename(path.join("part-0.parquet"), &tmp_path)?;
-        std::fs::remove_dir(path)?;
-        std::fs::rename(tmp_path, path)?;
+        std::fs::rename(path.join("part-0.parquet"), &tmp_path).int_err()?;
+        std::fs::remove_dir(path).int_err()?;
+        std::fs::rename(tmp_path, path).int_err()?;
 
         // Read file back and use metadata to understand how many rows were written
-        let reader = SerializedFileReader::new(std::fs::File::open(path).unwrap()).unwrap();
+        let reader = SerializedFileReader::new(std::fs::File::open(path).int_err()?).int_err()?;
 
         let metadata = reader.metadata();
         let num_rows: i64 = reader.metadata().file_metadata().num_rows();
@@ -383,7 +406,7 @@ impl Engine {
         tracing::info!(%metadata, num_rows, "Wrote data to parquet file");
 
         if num_rows == 0 {
-            std::fs::remove_file(path)?;
+            std::fs::remove_file(path).int_err()?;
         }
 
         Ok(num_rows)

@@ -14,6 +14,7 @@ use opendatafabric::serde::{EngineProtocolDeserializer, EngineProtocolSerializer
 use opendatafabric::{ExecuteQueryResponse, ExecuteQueryResponseInternalError};
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Request, Response, Status};
+use tracing::Instrument;
 
 use crate::engine::Engine;
 
@@ -82,32 +83,35 @@ impl EngineGRPC for EngineGRPCImpl {
 
         let engine = self.engine.clone();
 
-        tokio::spawn(async move {
-            let response = match engine.execute_query(request).await {
-                Ok(res) => ExecuteQueryResponse::Success(res),
-                Err(ExecuteQueryError::InvalidQuery(err)) => {
-                    ExecuteQueryResponse::InvalidQuery(err)
-                }
-                Err(ExecuteQueryError::EngineInternalError(err)) => {
-                    ExecuteQueryResponse::InternalError(err)
-                }
-                Err(ExecuteQueryError::InternalError(err)) => {
-                    ExecuteQueryResponse::InternalError(Self::into_serializable_error(err))
-                }
-            };
+        tokio::spawn(
+            async move {
+                let response = match engine.execute_query(request).await {
+                    Ok(res) => ExecuteQueryResponse::Success(res),
+                    Err(ExecuteQueryError::InvalidQuery(err)) => {
+                        ExecuteQueryResponse::InvalidQuery(err)
+                    }
+                    Err(ExecuteQueryError::EngineInternalError(err)) => {
+                        ExecuteQueryResponse::InternalError(err)
+                    }
+                    Err(ExecuteQueryError::InternalError(err)) => {
+                        ExecuteQueryResponse::InternalError(Self::into_serializable_error(err))
+                    }
+                };
 
-            tracing::info!(?response, "Produced response");
+                tracing::info!(?response, "Produced response");
 
-            let response_fb = FlatbuffersEngineProtocol
-                .write_execute_query_response(&response)
-                .unwrap();
+                let response_fb = FlatbuffersEngineProtocol
+                    .write_execute_query_response(&response)
+                    .unwrap();
 
-            let response_grpc = ExecuteQueryResponseGRPC {
-                flatbuffer: response_fb.collapse_vec(),
-            };
+                let response_grpc = ExecuteQueryResponseGRPC {
+                    flatbuffer: response_fb.collapse_vec(),
+                };
 
-            tx.send(Ok(response_grpc)).await.unwrap();
-        });
+                tx.send(Ok(response_grpc)).await.unwrap();
+            }
+            .instrument(tracing::Span::current()),
+        );
 
         Ok(Response::new(ReceiverStream::new(rx)))
     }
