@@ -1358,8 +1358,8 @@ checksum = "8bb03732005da905c88227371639bf1ad885cc712789c011c31c5fb3ab3ccf02"
 
 [[package]]
 name = "internal-error"
-version = "0.127.0"
-source = "git+https://github.com/kamu-data/kamu-cli?branch=features/datafusion-engine#6df7bc49232f068ff80a1171aab7115e45b97f88"
+version = "0.128.0"
+source = "git+https://github.com/kamu-data/kamu-cli?tag=v0.128.0#639e7a6f7cbe7680addf0866c980142c05c5283b"
 dependencies = [
  "thiserror",
 ]
@@ -1772,8 +1772,8 @@ checksum = "624a8340c38c1b80fd549087862da4ba43e08858af025b236e509b6649fc13d5"
 
 [[package]]
 name = "opendatafabric"
-version = "0.127.0"
-source = "git+https://github.com/kamu-data/kamu-cli?branch=features/datafusion-engine#6df7bc49232f068ff80a1171aab7115e45b97f88"
+version = "0.128.0"
+source = "git+https://github.com/kamu-data/kamu-cli?tag=v0.128.0#639e7a6f7cbe7680addf0866c980142c05c5283b"
 dependencies = [
  "bs58",
  "byteorder",

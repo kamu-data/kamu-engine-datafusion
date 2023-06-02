@@ -13,8 +13,8 @@ doctest = false
 
 [dependencies]
 # Kamu
-internal-error = { git = "https://github.com/kamu-data/kamu-cli", branch = "features/datafusion-engine", default-features = false }
-opendatafabric = { git = "https://github.com/kamu-data/kamu-cli", branch = "features/datafusion-engine", default-features = false }
+internal-error = { git = "https://github.com/kamu-data/kamu-cli", tag = "v0.128.0", default-features = false }
+opendatafabric = { git = "https://github.com/kamu-data/kamu-cli", tag = "v0.128.0", default-features = false }
 
 # Egine
 datafusion = "25"
