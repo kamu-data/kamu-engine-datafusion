@@ -1,6 +1,6 @@
 [package]
 name = "kamu-engine-datafusion"
-version = "0.1.2"
+version = "0.2.0"
 authors = ["Kamu Data Inc. <info@kamu.dev>"]
 license-file = "LICENSE.txt"
 edition = "2021"
@@ -17,7 +17,7 @@ internal-error = { git = "https://github.com/kamu-data/kamu-cli", tag = "v0.128.
 opendatafabric = { git = "https://github.com/kamu-data/kamu-cli", tag = "v0.128.0", version = "0.128.0", default-features = false }
 
 # Egine
-datafusion = "25"
+datafusion = "27"
 
 # Utils
 async-trait = "0.1"
@@ -57,23 +57,3 @@ incremental = false
 # Line info is enough to get good backtraces in CI - we don't need the
 # full debugging symbols that are only useful when attaching a debugger.
 debug = 1
-
-
-
-[patch.crates-io]
-# TODO: Waiting for https://github.com/apache/arrow-rs/issues/4308
-arrow = { git = "https://github.com/kamu-data/arrow-rs.git", branch = "bug/treat_legacy_timestamps_as_utc__39.0.0" }
-arrow-arith = { git = "https://github.com/kamu-data/arrow-rs.git", branch = "bug/treat_legacy_timestamps_as_utc__39.0.0" }
-arrow-array = { git = "https://github.com/kamu-data/arrow-rs.git", branch = "bug/treat_legacy_timestamps_as_utc__39.0.0" }
-arrow-buffer = { git = "https://github.com/kamu-data/arrow-rs.git", branch = "bug/treat_legacy_timestamps_as_utc__39.0.0" }
-arrow-cast = { git = "https://github.com/kamu-data/arrow-rs.git", branch = "bug/treat_legacy_timestamps_as_utc__39.0.0" }
-arrow-csv = { git = "https://github.com/kamu-data/arrow-rs.git", branch = "bug/treat_legacy_timestamps_as_utc__39.0.0" }
-arrow-data = { git = "https://github.com/kamu-data/arrow-rs.git", branch = "bug/treat_legacy_timestamps_as_utc__39.0.0" }
-arrow-ipc = { git = "https://github.com/kamu-data/arrow-rs.git", branch = "bug/treat_legacy_timestamps_as_utc__39.0.0" }
-arrow-json = { git = "https://github.com/kamu-data/arrow-rs.git", branch = "bug/treat_legacy_timestamps_as_utc__39.0.0" }
-arrow-ord = { git = "https://github.com/kamu-data/arrow-rs.git", branch = "bug/treat_legacy_timestamps_as_utc__39.0.0" }
-arrow-row = { git = "https://github.com/kamu-data/arrow-rs.git", branch = "bug/treat_legacy_timestamps_as_utc__39.0.0" }
-arrow-schema = { git = "https://github.com/kamu-data/arrow-rs.git", branch = "bug/treat_legacy_timestamps_as_utc__39.0.0" }
-arrow-select = { git = "https://github.com/kamu-data/arrow-rs.git", branch = "bug/treat_legacy_timestamps_as_utc__39.0.0" }
-arrow-string = { git = "https://github.com/kamu-data/arrow-rs.git", branch = "bug/treat_legacy_timestamps_as_utc__39.0.0" }
-parquet = { git = "https://github.com/kamu-data/arrow-rs.git", branch = "bug/treat_legacy_timestamps_as_utc__39.0.0" }

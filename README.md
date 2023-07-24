@@ -14,10 +14,9 @@ We recommend using this engine only for **basic filter/map operations** that do 
 
 More information and engine comparisons are [available here](https://docs.kamu.dev/cli/supported-engines/).
 
+
 ## Known Issues
-- [Not following the spec for TIMESTAMP_MILLIS legacy converted types](https://github.com/apache/arrow-rs/issues/4308)
-  - Using patched version
-- [UNION ALL schema harmonization failure in subquery/view](https://github.com/apache/arrow-datafusion/issues/6463)
+- None
 
 
 ## Developing
