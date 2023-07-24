@@ -30,7 +30,7 @@ jobs:
     steps:
       - uses: actions/checkout@v3
       - uses: actions-rs/toolchain@v1 # Uses rust-toolchain file
-      - run: cargo install --locked cargo-deny
+      - run: cargo install cargo-deny
       - run: cargo deny check
 
   test_linux:
