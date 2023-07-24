@@ -11,8 +11,11 @@ skip-tree = [
     { name = "digest" },                        # TODO: opendatafabric needs to update
     { name = "hashbrown" },                     # via dashmap
     { name = "hermit-abi" },                    # via datafusion
+    { name = "indexmap" },                      # TODO: multiple libraries need to update to v2
+    { name = "itertools" },
     { name = "redox_syscall" },                 # via parking-lot
     { name = "regex-syntax" },                  # via tracing-subscriber
+    { name = "regex-automata" },                # via matchers
     { name = "syn" },                           # many crates are in process of updating to v2
     { name = "time" },                          # via chrono
     { name = "windows-sys" },
@@ -20,6 +23,7 @@ skip-tree = [
     { name = "zstd" },
     { name = "zstd-safe" },
     { name = "sha2", depth = 2 },               # TODO: opendatafabric needs to update
+    { name = "strum", depth = 2 },              # TODO: comfy-table needs to update
     { name = "rand", depth = 2 },               # TODO: opendatafabric needs to update
     { name = "windows-targets", depth = 2 },
 ]
