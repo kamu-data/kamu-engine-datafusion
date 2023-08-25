@@ -280,19 +280,29 @@ async fn test_chain_of_queries() {
 
 #[test_log::test(tokio::test)]
 async fn test_propagates_input_watermark() {
-    let input_watermark: DateTime<Utc> = DateTime::parse_from_rfc3339("2023-01-01T00:00:00Z")
+    let input_watermark_1: DateTime<Utc> = DateTime::parse_from_rfc3339("2023-01-01T00:00:00Z")
+        .unwrap()
+        .into();
+
+    let input_watermark_2: DateTime<Utc> = DateTime::parse_from_rfc3339("2023-02-01T00:00:00Z")
         .unwrap()
         .into();
 
     test_query_common(TestQueryCommonOpts {
         mutate_request: Some(Box::new(move |mut r| {
-            r.inputs[0].explicit_watermarks = vec![Watermark {
-                system_time: input_watermark.clone(), // Doesn't matter
-                event_time: input_watermark.clone(),
-            }];
+            r.inputs[0].explicit_watermarks = vec![
+                Watermark {
+                    system_time: input_watermark_1.clone(), // Doesn't matter
+                    event_time: input_watermark_1.clone(),
+                },
+                Watermark {
+                    system_time: input_watermark_2.clone(), // Doesn't matter
+                    event_time: input_watermark_2.clone(),
+                },
+            ];
             r
         })),
-        expected_watermark: Some(Some(input_watermark)),
+        expected_watermark: Some(Some(input_watermark_2)),
         ..Default::default()
     })
     .await
@@ -470,6 +480,49 @@ async fn test_event_time_as_invalid_type() {
             assert_matches!(res, Err(ExecuteQueryError::InvalidQuery(_)))
         })),
         expected_data: Some(None),
+        ..Default::default()
+    })
+    .await
+}
+
+///////////////////////////////////////////////////////////////////////////////
+
+#[test_log::test(tokio::test)]
+async fn test_event_time_coerced_to_millis() {
+    test_query_common(TestQueryCommonOpts {
+        queries: Some(vec![SqlQueryStep {
+            alias: None,
+            query: r#"
+select
+    cast(cast(event_time as STRING) as TIMESTAMP) as event_time,
+    city,
+    population
+from foo
+            "#
+            .to_string(),
+        }]),
+        expected_data: Some(Some(
+            r#"
++--------+----------------------+----------------------+-----------+------------+
+| offset | system_time          | event_time           | city      | population |
++--------+----------------------+----------------------+-----------+------------+
+| 0      | 2023-03-01T00:00:00Z | 2023-01-01T00:00:00Z | vancouver | 675000     |
+| 1      | 2023-03-01T00:00:00Z | 2023-01-01T00:00:00Z | seattle   | 733000     |
+| 2      | 2023-03-01T00:00:00Z | 2023-01-01T00:00:00Z | kyiv      | 2884000    |
++--------+----------------------+----------------------+-----------+------------+
+            "#,
+        )),
+        expected_schema: Some(
+            r#"
+message arrow_schema {
+  REQUIRED INT64 offset;
+  REQUIRED INT64 system_time (TIMESTAMP(MILLIS,true));
+  REQUIRED INT64 event_time (TIMESTAMP(MILLIS,true));
+  REQUIRED BYTE_ARRAY city (STRING);
+  REQUIRED INT64 population;
+}
+            "#,
+        ),
         ..Default::default()
     })
     .await

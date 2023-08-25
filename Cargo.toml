@@ -17,7 +17,7 @@ internal-error = { git = "https://github.com/kamu-data/kamu-cli", tag = "v0.128.
 opendatafabric = { git = "https://github.com/kamu-data/kamu-cli", tag = "v0.128.0", version = "0.128.0", default-features = false }
 
 # Egine
-datafusion = "27"
+datafusion = "28"
 
 # Utils
 async-trait = "0.1"

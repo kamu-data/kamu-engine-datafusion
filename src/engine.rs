@@ -2,7 +2,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
-use datafusion::arrow::datatypes::DataType;
+use datafusion::arrow::datatypes::{DataType, TimeUnit};
 use datafusion::error::DataFusionError;
 use datafusion::logical_expr as expr;
 use datafusion::logical_expr::expr::WindowFunction;
@@ -53,6 +53,8 @@ impl Engine {
             .table(TableReference::bare(request.dataset_name.as_str()))
             .await
             .int_err()?;
+
+        let df = Self::normalize_raw_result(df)?;
 
         Self::validate_raw_result(&df, &vocab)?;
 
@@ -205,14 +207,47 @@ impl Engine {
         let watermark = request
             .inputs
             .iter()
-            .flat_map(|i| i.explicit_watermarks.iter())
-            .map(|wm| &wm.event_time)
+            .filter_map(|i| i.explicit_watermarks.iter().map(|wm| &wm.event_time).max())
             .min()
             .map(|dt| dt.clone());
 
         tracing::info!(?watermark, "Computed ouptut watermark");
 
         watermark
+    }
+
+    // TODO: This function currently ensures that all timestamps in the ouput are
+    // represeted as `Timestamp(Millis, "UTC")` for compatibility with other engines
+    // (e.g. Flink does not support event time with nanosecond precision).
+    fn normalize_raw_result(df: DataFrame) -> Result<DataFrame, ExecuteQueryError> {
+        let utc_tz: Arc<str> = Arc::from("UTC");
+
+        let mut select: Vec<Expr> = Vec::new();
+        let mut noop = true;
+
+        for field in df.schema().fields() {
+            let expr = match field.data_type() {
+                DataType::Timestamp(TimeUnit::Millisecond, Some(tz)) if tz.as_ref() == "UTC" => {
+                    col(field.unqualified_column())
+                }
+                DataType::Timestamp(_, _) => {
+                    noop = false;
+                    cast(
+                        col(field.unqualified_column()),
+                        DataType::Timestamp(TimeUnit::Millisecond, Some(utc_tz.clone())),
+                    )
+                    .alias(field.name())
+                }
+                _ => col(field.unqualified_column()),
+            };
+            select.push(expr);
+        }
+
+        if noop {
+            Ok(df)
+        } else {
+            Ok(df.select(select).int_err()?)
+        }
     }
 
     fn validate_raw_result(
