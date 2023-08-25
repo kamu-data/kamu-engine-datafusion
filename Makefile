@@ -22,3 +22,20 @@ image: build
 .PHONY: image-push
 image-push:
 	docker push $(ENGINE_IMAGE)
+
+
+###############################################################################
+# Release
+###############################################################################
+
+.PHONY: release-patch
+release-patch:
+	cargo set-version --workspace --bump patch
+
+.PHONY: release-minor
+release-minor:
+	cargo set-version --workspace --bump minor
+
+.PHONY: release-major
+release-major:
+	cargo set-version --workspace --bump major
