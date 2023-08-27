@@ -16,6 +16,7 @@ skip-tree = [
     { name = "redox_syscall" },                 # via parking-lot
     { name = "regex-syntax" },                  # via tracing-subscriber
     { name = "regex-automata" },                # via matchers
+    { name = "socket2" },
     { name = "syn" },                           # many crates are in process of updating to v2
     { name = "time" },                          # via chrono
     { name = "windows-sys" },

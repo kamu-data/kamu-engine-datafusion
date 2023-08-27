@@ -3,6 +3,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
+use indoc::indoc;
 use kamu_engine_datafusion::engine::Engine;
 use opendatafabric::engine::ExecuteQueryError;
 use opendatafabric::*;
@@ -123,6 +124,7 @@ struct TestQueryCommonOpts {
     queries: Option<Vec<SqlQueryStep>>,
     mutate_request: Option<Box<dyn FnOnce(ExecuteQueryRequest) -> ExecuteQueryRequest>>,
     check_result: Option<Box<dyn FnOnce(Result<ExecuteQueryResponseSuccess, ExecuteQueryError>)>>,
+    check_data: Option<Box<dyn FnOnce(&Path)>>,
     expected_data: Option<Option<&'static str>>,
     expected_schema: Option<&'static str>,
     expected_watermark: Option<Option<DateTime<Utc>>>,
@@ -210,6 +212,10 @@ async fn test_query_common(opts: TestQueryCommonOpts) {
         );
     }
 
+    if let Some(check_data) = opts.check_data {
+        check_data(&output_data_path)
+    }
+
     if let Some(expected_data) = expected_data {
         let actual_data = read_data_pretty(&output_data_path).await;
         assert_eq!(actual_data, expected_data.trim());
@@ -239,6 +245,65 @@ message arrow_schema {
 }
             "#,
         ),
+        ..Default::default()
+    })
+    .await
+}
+
+///////////////////////////////////////////////////////////////////////////////
+
+#[test_log::test(tokio::test)]
+async fn test_result_optimal_parquet_encoding() {
+    test_query_common(TestQueryCommonOpts {
+        expected_schema: Some(indoc!(
+            r#"
+            message arrow_schema {
+              REQUIRED INT64 offset;
+              REQUIRED INT64 system_time (TIMESTAMP(MILLIS,true));
+              REQUIRED INT64 event_time (TIMESTAMP(MILLIS,true));
+              REQUIRED BYTE_ARRAY city (STRING);
+              REQUIRED INT64 population;
+            }
+            "#
+        )),
+        check_data: Some(Box::new(|path| {
+            use datafusion::parquet::basic::{Compression, Encoding, PageType};
+            use datafusion::parquet::file::reader::FileReader;
+            use datafusion::parquet::file::serialized_reader::SerializedFileReader;
+
+            let reader = SerializedFileReader::new(std::fs::File::open(path).unwrap()).unwrap();
+            let meta = reader.metadata();
+
+            // TODO: Migrate to Parquet v2 and DATA_PAGE_V2
+            let assert_data_encoding = |col, enc| {
+                let data_page = reader
+                    .get_row_group(0)
+                    .unwrap()
+                    .get_column_page_reader(col)
+                    .unwrap()
+                    .map(|p| p.unwrap())
+                    .filter(|p| p.page_type() == PageType::DATA_PAGE)
+                    .next()
+                    .unwrap();
+
+                assert_eq!(data_page.encoding(), enc);
+            };
+
+            assert_eq!(meta.num_row_groups(), 1);
+
+            let offset_col = meta.row_group(0).column(0);
+            assert_eq!(offset_col.column_path().string(), "offset");
+            assert_eq!(offset_col.compression(), Compression::SNAPPY);
+
+            // TODO: Validate offset is delta-encoded
+            // See: https://github.com/kamu-data/kamu-engine-flink/issues/3
+            // assert_data_encoding(0, Encoding::DELTA_BINARY_PACKED);
+
+            let system_time_col = meta.row_group(0).column(1);
+            assert_eq!(system_time_col.column_path().string(), "system_time");
+            assert_eq!(system_time_col.compression(), Compression::SNAPPY);
+            assert_data_encoding(1, Encoding::RLE_DICTIONARY);
+        })),
         ..Default::default()
     })
     .await

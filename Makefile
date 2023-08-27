@@ -4,6 +4,29 @@ ENGINE_IMAGE_TAG = $(ENGINE_VERSION)
 ENGINE_IMAGE = ghcr.io/kamu-data/engine-datafusion:$(ENGINE_IMAGE_TAG)
 
 
+###############################################################################
+# Lint
+###############################################################################
+
+.PHONY: lint
+lint:
+	cargo fmt --check
+	cargo deny check
+
+
+###############################################################################
+# Test
+###############################################################################
+
+.PHONY: test
+test:
+	RUST_LOG_SPAN_EVENTS=new,close RUST_LOG=debug cargo nextest run
+
+
+###############################################################################
+# Build
+###############################################################################
+
 .PHONY: build
 build:
 	RUSTFLAGS="" cross build --release --target $(TARGET_ARCH)

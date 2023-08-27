@@ -7,6 +7,7 @@ use datafusion::error::DataFusionError;
 use datafusion::logical_expr as expr;
 use datafusion::logical_expr::expr::WindowFunction;
 use datafusion::logical_expr::{CreateView, DdlStatement, LogicalPlan};
+use datafusion::parquet::file::properties::WriterProperties;
 use datafusion::prelude::*;
 use datafusion::scalar::ScalarValue;
 use datafusion::sql::TableReference;
@@ -62,7 +63,13 @@ impl Engine {
             .await
             .int_err()?;
 
-        let num_rows = Self::write_parquet_single_file(df, &request.out_data_path).await?;
+        let num_rows = Self::write_parquet_single_file(
+            &ctx,
+            df,
+            &request.out_data_path,
+            Some(self.get_write_properties(&vocab)),
+        )
+        .await?;
 
         let output_watermark = Self::compute_output_watermark(&request);
 
@@ -131,10 +138,15 @@ impl Engine {
             .read_parquet(
                 input_files,
                 ParquetReadOptions {
+                    // TODO: Schema evolution
+                    schema: None,
                     file_extension: "",
+                    // TODO: Perf specifying `offset` sort order may improve some queries
+                    file_sort_order: Vec::new(),
                     table_partition_cols: Vec::new(),
                     parquet_pruning: None,
                     skip_metadata: None,
+                    insert_mode: datafusion::datasource::listing::ListingTableInsertMode::Error,
                 },
             )
             .await
@@ -397,28 +409,61 @@ impl Engine {
         Ok(df)
     }
 
+    // TODO: Externalize configuration
+    fn get_write_properties(&self, vocab: &DatasetVocabularyResolved<'_>) -> WriterProperties {
+        // TODO: `offset` column is sorted integers so we could use delta encoding, but
+        // Flink does not support it.
+        // See: https://github.com/kamu-data/kamu-engine-flink/issues/3
+        WriterProperties::builder()
+            .set_writer_version(datafusion::parquet::file::properties::WriterVersion::PARQUET_1_0)
+            .set_compression(datafusion::parquet::basic::Compression::SNAPPY)
+            // system_time value will be the same for all rows in a batch
+            .set_column_dictionary_enabled(vocab.system_time_column.as_ref().into(), true)
+            .build()
+    }
+
     async fn write_parquet_single_file(
+        ctx: &SessionContext,
         df: DataFrame,
         path: &Path,
+        writer_properties: Option<WriterProperties>,
     ) -> Result<i64, ExecuteQueryError> {
         use datafusion::parquet::file::reader::{FileReader, SerializedFileReader};
 
         tracing::info!(?path, "Writing result to parquet");
 
-        // Produces a directory of "part-X.parquet" files
-        // We configure to only produce one partition
-        df.write_parquet(path.as_os_str().to_str().unwrap(), None)
+        // Produces a directory of "<random>-[0..9].parquet" files
+        let plan = df.create_physical_plan().await.int_err()?;
+
+        // TODO: FIXME: As noted in https://github.com/apache/arrow-datafusion/issues/7423
+        // we are using an older API that support properties and have to pre-create empy
+        // directory due to what is likely a bug in ListingTableUrl
+        std::fs::create_dir(path).int_err()?;
+        ctx.write_parquet(plan, path.as_os_str().to_str().unwrap(), writer_properties)
             .await
             .int_err()?;
 
-        assert_eq!(
-            1,
-            path.read_dir().unwrap().into_iter().count(),
+        let mut read_dir = path.read_dir().unwrap();
+
+        let first_file = read_dir
+            .next()
+            .expect("write_parquet did not write any files")
+            .unwrap();
+
+        // Ensure only produced one file
+        assert!(
+            read_dir.next().is_none(),
             "write_parquet produced more than one file"
         );
 
-        let tmp_path = path.with_extension("tmp");
-        std::fs::rename(path.join("part-0.parquet"), &tmp_path).int_err()?;
+        let tmp_path = path.with_extension(format!(
+            "{}tmp",
+            path.extension()
+                .unwrap_or_default()
+                .to_str()
+                .unwrap_or_default()
+        ));
+        std::fs::rename(first_file.path(), &tmp_path).int_err()?;
         std::fs::remove_dir(path).int_err()?;
         std::fs::rename(tmp_path, path).int_err()?;
 

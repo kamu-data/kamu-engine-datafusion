@@ -17,11 +17,13 @@ internal-error = { git = "https://github.com/kamu-data/kamu-cli", tag = "v0.128.
 opendatafabric = { git = "https://github.com/kamu-data/kamu-cli", tag = "v0.128.0", version = "0.128.0", default-features = false }
 
 # Egine
-datafusion = "28"
+datafusion = "30"
 
 # Utils
 async-trait = "0.1"
 chrono = "0.4"
+indoc = "2"
+thiserror = { version = "=1.0.44", default-features = false }  # TODO: Pinned until rustc upgrade
 tokio = { version = "1", default-features = false, features=[] }
 tokio-stream = "0.1"
 tonic = "0.9"
