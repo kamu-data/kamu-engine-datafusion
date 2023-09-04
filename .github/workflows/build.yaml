@@ -14,7 +14,7 @@ jobs:
     name: Lint / Formatting
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       - uses: actions-rs/toolchain@v1 # Uses rust-toolchain file
         with:
           components: rustfmt
@@ -28,7 +28,7 @@ jobs:
     name: Lint / Dependencies
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       - uses: actions-rs/toolchain@v1 # Uses rust-toolchain file
       - run: cargo install cargo-deny
       - run: cargo deny check
@@ -39,7 +39,7 @@ jobs:
     env:
       CARGO_FLAGS: --profile ci
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       - uses: actions-rs/toolchain@v1 # Uses rust-toolchain file
       - uses: swatinem/rust-cache@v2
         with:
