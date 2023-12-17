@@ -111,7 +111,7 @@ impl Engine {
         let parquet_schema_str = String::from_utf8(parquet_schema_str).unwrap();
 
         tracing::info!(
-            name = %input.dataset_name,
+            input_name = %input.dataset_name,
             parquet_schema = %parquet_schema_str,
             "Raw parquet input schema",
         );
@@ -153,7 +153,7 @@ impl Engine {
             .int_err()?;
 
         tracing::info!(
-            name = %input.dataset_name,
+            input_name = %input.dataset_name,
             schema = ?df.schema(),
             "Registering input",
         );
@@ -185,7 +185,7 @@ impl Engine {
         let name = step.alias.as_ref().unwrap();
 
         tracing::info!(
-            %name,
+            view_name = %name,
             query = %step.query,
             "Creating view for a query",
         );
