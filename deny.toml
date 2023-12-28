@@ -8,25 +8,13 @@ workspace-default-features = "deny"
 # Avoid adding dependencies to this list as this slows down compilation.
 # Find another ways to avoid duplication.
 skip-tree = [
-    { name = "digest" },                        # TODO: opendatafabric needs to update
-    { name = "hashbrown" },                     # via dashmap
-    { name = "hermit-abi" },                    # via datafusion
     { name = "indexmap" },                      # TODO: multiple libraries need to update to v2
     { name = "itertools" },
     { name = "redox_syscall" },                 # via parking-lot
     { name = "regex-syntax" },                  # via tracing-subscriber
     { name = "regex-automata" },                # via matchers
-    { name = "socket2" },
-    { name = "syn" },                           # many crates are in process of updating to v2
-    { name = "time" },                          # via chrono
+    { name = "tracing-log" },                   # TODO: remove bunyan log formatter
     { name = "windows-sys" },
-    { name = "wasi" },
-    { name = "zstd" },
-    { name = "zstd-safe" },
-    { name = "sha2", depth = 2 },               # TODO: opendatafabric needs to update
-    { name = "strum", depth = 2 },              # TODO: comfy-table needs to update
-    { name = "rand", depth = 2 },               # TODO: opendatafabric needs to update
-    { name = "windows-targets", depth = 2 },
 ]
 deny = [
     # Use `md-5` instead, which is part of the RustCrypto ecosystem
@@ -43,11 +31,8 @@ allow = [
     "0BSD",
     "BSD-2-Clause",
     "BSD-3-Clause",
-    "ISC",
     "MIT",
-    "MPL-2.0",
     "Zlib",
-    "OpenSSL",
 ]
 copyleft = "deny"
 private = { ignore = true }
@@ -78,13 +63,5 @@ unsound = "warn"
 yanked = "deny"
 notice = "warn"
 ignore = [
-    # https://rustsec.org/advisories/RUSTSEC-2020-0071
-    # Ignoring it until `chrono` updates to new version of `time` crate.
-    # We are not affected by this voulnerability as `chrono` doesn't call the affected code.
-    "RUSTSEC-2020-0071",
-    # https://rustsec.org/advisories/RUSTSEC-2022-0093
-    # Should be fixed in upstream repo
-    "RUSTSEC-2022-0093",
-
 ]
 
