@@ -153,7 +153,7 @@ async fn test_query_common(opts: TestQueryCommonOpts) {
     // Run test
     let tempdir = tempfile::tempdir().unwrap();
 
-    let output_data_path = tempdir.path().join("output");
+    let new_data_path = tempdir.path().join("output");
     let input_data_path = tempdir.path().join("input");
 
     if let Some(write_input_data) = opts.write_input_data {
@@ -165,12 +165,12 @@ async fn test_query_common(opts: TestQueryCommonOpts) {
     let engine = Engine::new().await;
 
     let request = ExecuteQueryRequest {
-        dataset_id: DatasetID::from_new_keypair_ed25519().1,
-        dataset_name: DatasetName::new_unchecked("bar"),
+        dataset_id: DatasetID::new_seeded_ed25519(b"bar"),
+        dataset_alias: "bar".try_into().unwrap(),
         system_time: DateTime::parse_from_rfc3339("2023-03-01T00:00:00Z")
             .unwrap()
             .into(),
-        offset: 0,
+        next_offset: 0,
         vocab: DatasetVocabulary::default(),
         transform: Transform::Sql(TransformSql {
             engine: "datafusion".into(),
@@ -179,10 +179,11 @@ async fn test_query_common(opts: TestQueryCommonOpts) {
             queries: Some(queries),
             temporal_tables: None,
         }),
-        inputs: vec![ExecuteQueryInput {
-            dataset_id: DatasetID::from_new_keypair_ed25519().1,
-            dataset_name: DatasetName::new_unchecked("foo"),
-            data_interval: Some(OffsetInterval { start: 0, end: 2 }),
+        query_inputs: vec![ExecuteQueryRequestInput {
+            dataset_id: DatasetID::new_seeded_ed25519(b"foo"),
+            dataset_alias: "foo".try_into().unwrap(),
+            query_alias: "foo".to_string(),
+            offset_interval: Some(OffsetInterval { start: 0, end: 2 }),
             vocab: DatasetVocabulary::default(),
             data_paths: vec![input_data_path.clone()],
             schema_file: input_data_path.clone(),
@@ -190,7 +191,7 @@ async fn test_query_common(opts: TestQueryCommonOpts) {
         }],
         prev_checkpoint_path: None,
         new_checkpoint_path: tempdir.path().join("checkpoint"),
-        out_data_path: output_data_path.clone(),
+        new_data_path: new_data_path.clone(),
     };
     let request = if let Some(f) = opts.mutate_request {
         f(request)
@@ -206,25 +207,25 @@ async fn test_query_common(opts: TestQueryCommonOpts) {
         assert_eq!(
             actual_result.unwrap(),
             ExecuteQueryResponseSuccess {
-                data_interval: Some(OffsetInterval { start: 0, end: 2 }),
-                output_watermark: opts.expected_watermark.unwrap_or(None),
+                new_offset_interval: Some(OffsetInterval { start: 0, end: 2 }),
+                new_watermark: opts.expected_watermark.unwrap_or(None),
             }
         );
     }
 
     if let Some(check_data) = opts.check_data {
-        check_data(&output_data_path)
+        check_data(&new_data_path)
     }
 
     if let Some(expected_data) = expected_data {
-        let actual_data = read_data_pretty(&output_data_path).await;
+        let actual_data = read_data_pretty(&new_data_path).await;
         assert_eq!(actual_data, expected_data.trim());
     } else {
-        assert!(!output_data_path.exists());
+        assert!(!new_data_path.exists());
     }
 
     if let Some(expected_schema) = opts.expected_schema {
-        let actual_schema = read_parquet_schema_pretty(&output_data_path).await;
+        let actual_schema = read_parquet_schema_pretty(&new_data_path).await;
         assert_eq!(actual_schema.trim(), expected_schema.trim());
     }
 }
@@ -237,7 +238,7 @@ async fn test_result_schema() {
         expected_schema: Some(
             r#"
 message arrow_schema {
-  REQUIRED INT64 offset;
+  OPTIONAL INT64 offset;
   REQUIRED INT64 system_time (TIMESTAMP(MILLIS,true));
   REQUIRED INT64 event_time (TIMESTAMP(MILLIS,true));
   REQUIRED BYTE_ARRAY city (STRING);
@@ -258,7 +259,7 @@ async fn test_result_optimal_parquet_encoding() {
         expected_schema: Some(indoc!(
             r#"
             message arrow_schema {
-              REQUIRED INT64 offset;
+              OPTIONAL INT64 offset;
               REQUIRED INT64 system_time (TIMESTAMP(MILLIS,true));
               REQUIRED INT64 event_time (TIMESTAMP(MILLIS,true));
               REQUIRED BYTE_ARRAY city (STRING);
@@ -355,7 +356,7 @@ async fn test_propagates_input_watermark() {
 
     test_query_common(TestQueryCommonOpts {
         mutate_request: Some(Box::new(move |mut r| {
-            r.inputs[0].explicit_watermarks = vec![
+            r.query_inputs[0].explicit_watermarks = vec![
                 Watermark {
                     system_time: input_watermark_1.clone(), // Doesn't matter
                     event_time: input_watermark_1.clone(),
@@ -386,8 +387,8 @@ async fn test_empty_result() {
             assert_eq!(
                 res.unwrap(),
                 ExecuteQueryResponseSuccess {
-                    data_interval: None,
-                    output_watermark: None,
+                    new_offset_interval: None,
+                    new_watermark: None,
                 }
             )
         })),
@@ -403,16 +404,16 @@ async fn test_empty_result() {
 async fn test_empty_input() {
     test_query_common(TestQueryCommonOpts {
         mutate_request: Some(Box::new(|mut r| {
-            r.inputs[0].data_interval = None;
-            r.inputs[0].data_paths = Vec::new();
+            r.query_inputs[0].offset_interval = None;
+            r.query_inputs[0].data_paths = Vec::new();
             r
         })),
         check_result: Some(Box::new(|res| {
             assert_eq!(
                 res.unwrap(),
                 ExecuteQueryResponseSuccess {
-                    data_interval: None,
-                    output_watermark: None,
+                    new_offset_interval: None,
+                    new_watermark: None,
                 }
             )
         })),
@@ -428,15 +429,15 @@ async fn test_empty_input() {
 async fn test_partial_input() {
     test_query_common(TestQueryCommonOpts {
         mutate_request: Some(Box::new(|mut r| {
-            r.inputs[0].data_interval = Some(OffsetInterval { start: 1, end: 1 });
+            r.query_inputs[0].offset_interval = Some(OffsetInterval { start: 1, end: 1 });
             r
         })),
         check_result: Some(Box::new(|res| {
             assert_eq!(
                 res.unwrap(),
                 ExecuteQueryResponseSuccess {
-                    data_interval: Some(OffsetInterval { start: 0, end: 0 }),
-                    output_watermark: None,
+                    new_offset_interval: Some(OffsetInterval { start: 0, end: 0 }),
+                    new_watermark: None,
                 }
             )
         })),
@@ -460,15 +461,15 @@ async fn test_partial_input() {
 async fn test_output_offset() {
     test_query_common(TestQueryCommonOpts {
         mutate_request: Some(Box::new(|mut r| {
-            r.offset = 10;
+            r.next_offset = 10;
             r
         })),
         check_result: Some(Box::new(|res| {
             assert_eq!(
                 res.unwrap(),
                 ExecuteQueryResponseSuccess {
-                    data_interval: Some(OffsetInterval { start: 10, end: 12 }),
-                    output_watermark: None,
+                    new_offset_interval: Some(OffsetInterval { start: 10, end: 12 }),
+                    new_watermark: None,
                 }
             )
         })),
@@ -580,7 +581,7 @@ from foo
         expected_schema: Some(
             r#"
 message arrow_schema {
-  REQUIRED INT64 offset;
+  OPTIONAL INT64 offset;
   REQUIRED INT64 system_time (TIMESTAMP(MILLIS,true));
   REQUIRED INT64 event_time (TIMESTAMP(MILLIS,true));
   REQUIRED BYTE_ARRAY city (STRING);

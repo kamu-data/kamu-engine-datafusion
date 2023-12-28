@@ -37,7 +37,7 @@ impl EngineGRPCImpl {
         let mut message = String::with_capacity(200);
         write!(message, "{}", current_err).unwrap();
 
-        let mut backtrace = current_err.request_ref::<Backtrace>();
+        let mut backtrace = core::error::request_ref::<Backtrace>(current_err);
 
         while let Some(source) = current_err.source() {
             current_err = source;
@@ -46,7 +46,7 @@ impl EngineGRPCImpl {
             write!(message, ": {}", current_err).unwrap();
 
             // Find inner-most backtrace
-            if let Some(bt) = current_err.request_ref::<Backtrace>() {
+            if let Some(bt) = core::error::request_ref::<Backtrace>(current_err) {
                 if bt.status() == BacktraceStatus::Captured {
                     backtrace = Some(bt);
                 }

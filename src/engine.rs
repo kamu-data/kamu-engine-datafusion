@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use datafusion::arrow::datatypes::{DataType, TimeUnit};
+use datafusion::dataframe::DataFrameWriteOptions;
 use datafusion::error::DataFusionError;
 use datafusion::logical_expr as expr;
 use datafusion::logical_expr::expr::WindowFunction;
@@ -20,6 +21,8 @@ use opendatafabric::*;
 pub struct Engine {}
 
 impl Engine {
+    const OUTPUT_VIEW_NAME: &'static str = "__output__";
+
     pub async fn new() -> Self {
         Self {}
     }
@@ -29,7 +32,6 @@ impl Engine {
         request: ExecuteQueryRequest,
     ) -> Result<ExecuteQueryResponseSuccess, ExecuteQueryError> {
         let Transform::Sql(transform) = request.transform.clone();
-        let transform = transform.normalize_queries(Some(request.dataset_name.to_string()));
         let vocab = DatasetVocabularyResolved::from(&request.vocab);
 
         let cfg = SessionConfig::new()
@@ -37,67 +39,66 @@ impl Engine {
             .with_default_catalog_and_schema("odf", "odf")
             .with_target_partitions(1);
 
-        let ctx = SessionContext::with_config(cfg);
+        let ctx = SessionContext::new_with_config(cfg);
 
         // Setup inputs
-        for input in &request.inputs {
+        for input in &request.query_inputs {
             Self::register_input(&ctx, input).await?;
         }
 
         // Setup queries
         for step in transform.queries.as_ref().unwrap() {
-            Self::register_view_for_step(&ctx, step).await?;
+            Self::register_view_for_step(
+                &ctx,
+                step.alias.as_deref().unwrap_or(Self::OUTPUT_VIEW_NAME),
+                &step.query,
+            )
+            .await?;
         }
 
         // Get result's execution plan
-        let df = ctx
-            .table(TableReference::bare(request.dataset_name.as_str()))
-            .await
-            .int_err()?;
+        let df = ctx.table(Self::OUTPUT_VIEW_NAME).await.int_err()?;
 
         let df = Self::normalize_raw_result(df)?;
 
         Self::validate_raw_result(&df, &vocab)?;
 
-        let df = Self::with_system_columns(df, &vocab, request.system_time, request.offset)
+        let df = Self::with_system_columns(df, &vocab, request.system_time, request.next_offset)
             .await
             .int_err()?;
 
-        let num_rows = Self::write_parquet_single_file(
-            &ctx,
-            df,
-            &request.out_data_path,
-            Some(self.get_write_properties(&vocab)),
-        )
-        .await?;
+        let num_rows = self
+            .write_parquet(&request.new_data_path, df, &vocab)
+            .await?;
 
-        let output_watermark = Self::compute_output_watermark(&request);
+        let new_watermark = Self::compute_new_watermark(&request);
 
         if num_rows == 0 {
             Ok(ExecuteQueryResponseSuccess {
-                data_interval: None,
-                output_watermark,
+                new_offset_interval: None,
+                new_watermark,
             })
         } else {
             Ok(ExecuteQueryResponseSuccess {
-                data_interval: Some(OffsetInterval {
-                    start: request.offset,
-                    end: request.offset + num_rows - 1,
+                new_offset_interval: Some(OffsetInterval {
+                    start: request.next_offset,
+                    end: request.next_offset + num_rows - 1,
                 }),
-                output_watermark,
+                new_watermark,
             })
         }
     }
 
+    #[tracing::instrument(level = "info", skip_all, fields(dataset_id = %input.dataset_id, dataset_alias = %input.dataset_alias, query_alias = %input.query_alias))]
     async fn register_input(
         ctx: &SessionContext,
-        input: &ExecuteQueryInput,
+        input: &ExecuteQueryRequestInput,
     ) -> Result<(), ExecuteQueryError> {
         use datafusion::parquet::file::reader::{FileReader, SerializedFileReader};
 
         assert!(
-            (input.data_paths.is_empty() && input.data_interval.is_none())
-                || (!input.data_paths.is_empty() && input.data_interval.is_some())
+            (input.data_paths.is_empty() && input.offset_interval.is_none())
+                || (!input.data_paths.is_empty() && input.offset_interval.is_some())
         );
 
         // Read raw parquet schema
@@ -111,7 +112,6 @@ impl Engine {
         let parquet_schema_str = String::from_utf8(parquet_schema_str).unwrap();
 
         tracing::info!(
-            input_name = %input.dataset_name,
             parquet_schema = %parquet_schema_str,
             "Raw parquet input schema",
         );
@@ -146,20 +146,19 @@ impl Engine {
                     table_partition_cols: Vec::new(),
                     parquet_pruning: None,
                     skip_metadata: None,
-                    insert_mode: datafusion::datasource::listing::ListingTableInsertMode::Error,
                 },
             )
             .await
             .int_err()?;
 
         tracing::info!(
-            input_name = %input.dataset_name,
-            schema = ?df.schema(),
+            query_alias = %input.query_alias,
+            arrow_schema = ?df.schema(),
             "Registering input",
         );
 
         let vocab = DatasetVocabularyResolved::from(&input.vocab);
-        let df = if let Some(offset_interval) = &input.data_interval {
+        let df = if let Some(offset_interval) = &input.offset_interval {
             df.filter(and(
                 col(&vocab.offset_column as &str).gt_eq(lit(offset_interval.start)),
                 col(&vocab.offset_column as &str).lt_eq(lit(offset_interval.end)),
@@ -169,31 +168,27 @@ impl Engine {
             df.filter(lit(false)).int_err()?
         };
 
-        ctx.register_table(
-            TableReference::bare(input.dataset_name.as_str()),
-            df.into_view(),
-        )
-        .int_err()?;
+        ctx.register_table(TableReference::bare(&input.query_alias), df.into_view())
+            .int_err()?;
 
         Ok(())
     }
 
     async fn register_view_for_step(
         ctx: &SessionContext,
-        step: &SqlQueryStep,
+        name: &str,
+        query: &str,
     ) -> Result<(), ExecuteQueryError> {
-        let name = step.alias.as_ref().unwrap();
-
         tracing::info!(
             view_name = %name,
-            query = %step.query,
+            query = %query,
             "Creating view for a query",
         );
 
-        let logical_plan = match ctx.state().create_logical_plan(&step.query).await {
+        let logical_plan = match ctx.state().create_logical_plan(query).await {
             Ok(plan) => plan,
             Err(error) => {
-                tracing::debug!(?error, query = %step.query, "Error when setting up query");
+                tracing::debug!(?error, query = %query, "Error when setting up query");
                 return Err(ExecuteQueryResponseInvalidQuery {
                     message: error.to_string(),
                 }
@@ -202,22 +197,22 @@ impl Engine {
         };
 
         let create_view = LogicalPlan::Ddl(DdlStatement::CreateView(CreateView {
-            name: TableReference::bare(step.alias.as_ref().unwrap()).to_owned_reference(),
+            name: TableReference::bare(name).to_owned_reference(),
             input: Arc::new(logical_plan),
             or_replace: false,
-            definition: Some(step.query.clone()),
+            definition: Some(query.to_string()),
         }));
 
         ctx.execute_logical_plan(create_view).await.int_err()?;
         Ok(())
     }
 
-    // Computes output watermark as minimum of all inputs
+    // Computes new watermark as minimum of all inputs
     // This will change when we add support for aggregation, joins and other
     // streaming operations
-    fn compute_output_watermark(request: &ExecuteQueryRequest) -> Option<DateTime<Utc>> {
+    fn compute_new_watermark(request: &ExecuteQueryRequest) -> Option<DateTime<Utc>> {
         let watermark = request
-            .inputs
+            .query_inputs
             .iter()
             .filter_map(|i| i.explicit_watermarks.iter().map(|wm| &wm.event_time).max())
             .min()
@@ -352,7 +347,7 @@ impl Engine {
         df: DataFrame,
         vocab: &DatasetVocabularyResolved<'_>,
         system_time: DateTime<Utc>,
-        start_offset: i64,
+        start_offset: u64,
     ) -> Result<DataFrame, DataFusionError> {
         // Collect non-system column names for later
         let mut raw_columns_wo_event_time: Vec<_> = df
@@ -381,7 +376,7 @@ impl Engine {
         let df = df.with_column(
             &vocab.offset_column,
             cast(
-                col(&vocab.offset_column as &str) + lit(start_offset - 1),
+                col(&vocab.offset_column as &str) + lit(start_offset as i64 - 1),
                 DataType::Int64,
             ),
         )?;
@@ -422,73 +417,42 @@ impl Engine {
             .build()
     }
 
-    async fn write_parquet_single_file(
-        ctx: &SessionContext,
-        df: DataFrame,
+    async fn write_parquet(
+        &self,
         path: &Path,
-        writer_properties: Option<WriterProperties>,
-    ) -> Result<i64, ExecuteQueryError> {
-        use datafusion::parquet::file::reader::{FileReader, SerializedFileReader};
+        df: DataFrame,
+        vocab: &DatasetVocabularyResolved<'_>,
+    ) -> Result<u64, InternalError> {
+        use datafusion::arrow::array::UInt64Array;
 
         tracing::info!(?path, "Writing result to parquet");
 
-        // Produces a directory of "<random>-[0..9].parquet" files
-        let plan = df.create_physical_plan().await.int_err()?;
-
-        // TODO: FIXME: As noted in https://github.com/apache/arrow-datafusion/issues/7423
-        // we are using an older API that support properties and have to pre-create empy
-        // directory due to what is likely a bug in ListingTableUrl
-        std::fs::create_dir(path).int_err()?;
-        ctx.write_parquet(plan, path.as_os_str().to_str().unwrap(), writer_properties)
+        let res = df
+            .write_parquet(
+                path.as_os_str().to_str().unwrap(),
+                DataFrameWriteOptions::new().with_single_file_output(true),
+                Some(self.get_write_properties(vocab)),
+            )
             .await
             .int_err()?;
 
-        let mut read_dir = path.read_dir().unwrap();
+        assert_eq!(res.len(), 1);
+        assert_eq!(res[0].num_columns(), 1);
+        assert_eq!(res[0].num_rows(), 1);
+        let num_records = res[0]
+            .column(0)
+            .as_any()
+            .downcast_ref::<UInt64Array>()
+            .unwrap()
+            .value(0);
 
-        let first_file = read_dir
-            .next()
-            .expect("write_parquet did not write any files")
-            .unwrap();
-
-        // Ensure only produced one file
-        assert!(
-            read_dir.next().is_none(),
-            "write_parquet produced more than one file"
-        );
-
-        let tmp_path = path.with_extension(format!(
-            "{}tmp",
-            path.extension()
-                .unwrap_or_default()
-                .to_str()
-                .unwrap_or_default()
-        ));
-        std::fs::rename(first_file.path(), &tmp_path).int_err()?;
-        std::fs::remove_dir(path).int_err()?;
-        std::fs::rename(tmp_path, path).int_err()?;
-
-        // Read file back and use metadata to understand how many rows were written
-        let reader = SerializedFileReader::new(std::fs::File::open(path).int_err()?).int_err()?;
-
-        let metadata = reader.metadata();
-        let num_rows: i64 = reader.metadata().file_metadata().num_rows();
-
-        // Print metadata for debugging
-        let metadata = {
-            let mut metadata_buf = Vec::new();
-            datafusion::parquet::schema::printer::print_parquet_metadata(
-                &mut metadata_buf,
-                metadata,
-            );
-            String::from_utf8(metadata_buf).unwrap()
-        };
-
-        tracing::info!(%metadata, num_rows, "Wrote data to parquet file");
-
-        if num_rows == 0 {
-            std::fs::remove_file(path).int_err()?;
+        if num_records > 0 {
+            tracing::info!(?path, num_records, "Produced parquet file");
+        } else {
+            // Clean up empty file
+            tracing::info!("Produced empty result",);
+            let _ = std::fs::remove_file(path);
         }
-
-        Ok(num_rows)
+        Ok(num_records)
     }
 }

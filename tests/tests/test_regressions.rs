@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{DataType, TimeUnit};
+use datafusion::dataframe::DataFrameWriteOptions;
 use datafusion::prelude::*;
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -52,10 +53,22 @@ async fn test_issues_datafusion_6463() {
 
     let tempdir = tempfile::tempdir().unwrap();
     let output_path = format!("{}/foo", tempdir.path().display());
-    df.write_parquet(&output_path, None).await.unwrap();
+    df.write_parquet(
+        &output_path,
+        DataFrameWriteOptions::new().with_single_file_output(true),
+        None,
+    )
+    .await
+    .unwrap();
 
     let df = ctx
-        .read_parquet(&output_path, ParquetReadOptions::default())
+        .read_parquet(
+            &output_path,
+            ParquetReadOptions {
+                file_extension: "",
+                ..Default::default()
+            },
+        )
         .await
         .unwrap();
 
