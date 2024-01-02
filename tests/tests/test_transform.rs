@@ -5,7 +5,7 @@ use std::sync::Arc;
 use chrono::{DateTime, Utc};
 use indoc::indoc;
 use kamu_engine_datafusion::engine::Engine;
-use opendatafabric::engine::ExecuteQueryError;
+use opendatafabric::engine::ExecuteTransformError;
 use opendatafabric::*;
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -122,8 +122,8 @@ async fn read_parquet_schema_pretty(path: impl AsRef<Path>) -> String {
 struct TestQueryCommonOpts {
     write_input_data: Option<Box<dyn FnOnce(&Path)>>,
     queries: Option<Vec<SqlQueryStep>>,
-    mutate_request: Option<Box<dyn FnOnce(ExecuteQueryRequest) -> ExecuteQueryRequest>>,
-    check_result: Option<Box<dyn FnOnce(Result<ExecuteQueryResponseSuccess, ExecuteQueryError>)>>,
+    mutate_request: Option<Box<dyn FnOnce(TransformRequest) -> TransformRequest>>,
+    check_result: Option<Box<dyn FnOnce(Result<TransformResponseSuccess, ExecuteTransformError>)>>,
     check_data: Option<Box<dyn FnOnce(&Path)>>,
     expected_data: Option<Option<&'static str>>,
     expected_schema: Option<&'static str>,
@@ -164,7 +164,7 @@ async fn test_query_common(opts: TestQueryCommonOpts) {
 
     let engine = Engine::new().await;
 
-    let request = ExecuteQueryRequest {
+    let request = TransformRequest {
         dataset_id: DatasetID::new_seeded_ed25519(b"bar"),
         dataset_alias: "bar".try_into().unwrap(),
         system_time: DateTime::parse_from_rfc3339("2023-03-01T00:00:00Z")
@@ -179,7 +179,7 @@ async fn test_query_common(opts: TestQueryCommonOpts) {
             queries: Some(queries),
             temporal_tables: None,
         }),
-        query_inputs: vec![ExecuteQueryRequestInput {
+        query_inputs: vec![TransformRequestInput {
             dataset_id: DatasetID::new_seeded_ed25519(b"foo"),
             dataset_alias: "foo".try_into().unwrap(),
             query_alias: "foo".to_string(),
@@ -199,14 +199,14 @@ async fn test_query_common(opts: TestQueryCommonOpts) {
         request
     };
 
-    let actual_result = engine.execute_query(request).await;
+    let actual_result = engine.execute_transform(request).await;
 
     if let Some(check_result) = opts.check_result {
         check_result(actual_result)
     } else {
         assert_eq!(
             actual_result.unwrap(),
-            ExecuteQueryResponseSuccess {
+            TransformResponseSuccess {
                 new_offset_interval: Some(OffsetInterval { start: 0, end: 2 }),
                 new_watermark: opts.expected_watermark.unwrap_or(None),
             }
@@ -386,7 +386,7 @@ async fn test_empty_result() {
         check_result: Some(Box::new(|res| {
             assert_eq!(
                 res.unwrap(),
-                ExecuteQueryResponseSuccess {
+                TransformResponseSuccess {
                     new_offset_interval: None,
                     new_watermark: None,
                 }
@@ -411,7 +411,7 @@ async fn test_empty_input() {
         check_result: Some(Box::new(|res| {
             assert_eq!(
                 res.unwrap(),
-                ExecuteQueryResponseSuccess {
+                TransformResponseSuccess {
                     new_offset_interval: None,
                     new_watermark: None,
                 }
@@ -435,7 +435,7 @@ async fn test_partial_input() {
         check_result: Some(Box::new(|res| {
             assert_eq!(
                 res.unwrap(),
-                ExecuteQueryResponseSuccess {
+                TransformResponseSuccess {
                     new_offset_interval: Some(OffsetInterval { start: 0, end: 0 }),
                     new_watermark: None,
                 }
@@ -467,7 +467,7 @@ async fn test_output_offset() {
         check_result: Some(Box::new(|res| {
             assert_eq!(
                 res.unwrap(),
-                ExecuteQueryResponseSuccess {
+                TransformResponseSuccess {
                     new_offset_interval: Some(OffsetInterval { start: 10, end: 12 }),
                     new_watermark: None,
                 }
@@ -499,7 +499,7 @@ async fn test_bad_sql() {
             query: "select event_time, city, populllation from foo".to_string(),
         }]),
         check_result: Some(Box::new(|res| {
-            assert_matches!(res, Err(ExecuteQueryError::InvalidQuery(_)))
+            assert_matches!(res, Err(ExecuteTransformError::InvalidQuery(_)))
         })),
         expected_data: Some(None),
         ..Default::default()
@@ -543,7 +543,7 @@ async fn test_event_time_as_invalid_type() {
             query: "select 123 as event_time, city, population from foo".to_string(),
         }]),
         check_result: Some(Box::new(|res| {
-            assert_matches!(res, Err(ExecuteQueryError::InvalidQuery(_)))
+            assert_matches!(res, Err(ExecuteTransformError::InvalidQuery(_)))
         })),
         expected_data: Some(None),
         ..Default::default()

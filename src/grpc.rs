@@ -5,13 +5,20 @@ use std::sync::Arc;
 use internal_error::InternalError;
 use opendatafabric::engine::grpc_generated::engine_server::Engine as EngineGRPC;
 use opendatafabric::engine::grpc_generated::{
-    ExecuteQueryRequest as ExecuteQueryRequestGRPC,
-    ExecuteQueryResponse as ExecuteQueryResponseGRPC,
+    RawQueryRequest as RawQueryRequestGRPC,
+    RawQueryResponse as RawQueryResponseGRPC,
+    TransformRequest as TransformRequestGRPC,
+    TransformResponse as TransformResponseGRPC,
 };
-use opendatafabric::engine::ExecuteQueryError;
+use opendatafabric::engine::{ExecuteRawQueryError, ExecuteTransformError};
 use opendatafabric::serde::flatbuffers::FlatbuffersEngineProtocol;
 use opendatafabric::serde::{EngineProtocolDeserializer, EngineProtocolSerializer};
-use opendatafabric::{ExecuteQueryResponse, ExecuteQueryResponseInternalError};
+use opendatafabric::{
+    RawQueryResponse,
+    RawQueryResponseInternalError,
+    TransformResponse,
+    TransformResponseInternalError,
+};
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Request, Response, Status};
 use tracing::Instrument;
@@ -29,7 +36,7 @@ impl EngineGRPCImpl {
         Self { engine }
     }
 
-    fn into_serializable_error(err: InternalError) -> ExecuteQueryResponseInternalError {
+    fn format_error_message_and_backtrace(err: InternalError) -> (String, Option<String>) {
         use std::fmt::Write;
 
         let mut current_err: &dyn Error = &err;
@@ -58,7 +65,7 @@ impl EngineGRPCImpl {
             _ => None,
         };
 
-        ExecuteQueryResponseInternalError { message, backtrace }
+        (message, backtrace)
     }
 }
 
@@ -66,15 +73,16 @@ impl EngineGRPCImpl {
 
 #[tonic::async_trait]
 impl EngineGRPC for EngineGRPCImpl {
-    type ExecuteQueryStream = ReceiverStream<Result<ExecuteQueryResponseGRPC, Status>>;
+    type ExecuteRawQueryStream = ReceiverStream<Result<RawQueryResponseGRPC, Status>>;
+    type ExecuteTransformStream = ReceiverStream<Result<TransformResponseGRPC, Status>>;
 
     #[tracing::instrument(level = "info", skip_all)]
-    async fn execute_query(
+    async fn execute_raw_query(
         &self,
-        request_grpc: Request<ExecuteQueryRequestGRPC>,
-    ) -> Result<Response<Self::ExecuteQueryStream>, Status> {
+        request_grpc: Request<RawQueryRequestGRPC>,
+    ) -> Result<Response<Self::ExecuteRawQueryStream>, Status> {
         let request = FlatbuffersEngineProtocol
-            .read_execute_query_request(&request_grpc.get_ref().flatbuffer)
+            .read_raw_query_request(&request_grpc.get_ref().flatbuffer)
             .unwrap();
 
         tracing::info!(?request, "Got request");
@@ -85,26 +93,82 @@ impl EngineGRPC for EngineGRPCImpl {
 
         tokio::spawn(
             async move {
-                let response = match engine.execute_query(request).await {
-                    Ok(res) => ExecuteQueryResponse::Success(res),
-                    Err(ExecuteQueryError::InvalidQuery(err)) => {
-                        ExecuteQueryResponse::InvalidQuery(err)
+                let response = match engine.execute_raw_query(request).await {
+                    Ok(res) => RawQueryResponse::Success(res),
+                    Err(ExecuteRawQueryError::InvalidQuery(err)) => {
+                        RawQueryResponse::InvalidQuery(err)
                     }
-                    Err(ExecuteQueryError::EngineInternalError(err)) => {
-                        ExecuteQueryResponse::InternalError(err)
+                    Err(ExecuteRawQueryError::EngineInternalError(err)) => {
+                        RawQueryResponse::InternalError(err)
                     }
-                    Err(ExecuteQueryError::InternalError(err)) => {
-                        ExecuteQueryResponse::InternalError(Self::into_serializable_error(err))
+                    Err(ExecuteRawQueryError::InternalError(err)) => {
+                        let (message, backtrace) = Self::format_error_message_and_backtrace(err);
+                        RawQueryResponse::InternalError(RawQueryResponseInternalError {
+                            message,
+                            backtrace,
+                        })
                     }
                 };
 
                 tracing::info!(?response, "Produced response");
 
                 let response_fb = FlatbuffersEngineProtocol
-                    .write_execute_query_response(&response)
+                    .write_raw_query_response(&response)
                     .unwrap();
 
-                let response_grpc = ExecuteQueryResponseGRPC {
+                let response_grpc = RawQueryResponseGRPC {
+                    flatbuffer: response_fb.collapse_vec(),
+                };
+
+                tx.send(Ok(response_grpc)).await.unwrap();
+            }
+            .instrument(tracing::Span::current()),
+        );
+
+        Ok(Response::new(ReceiverStream::new(rx)))
+    }
+
+    #[tracing::instrument(level = "info", skip_all)]
+    async fn execute_transform(
+        &self,
+        request_grpc: Request<TransformRequestGRPC>,
+    ) -> Result<Response<Self::ExecuteTransformStream>, Status> {
+        let request = FlatbuffersEngineProtocol
+            .read_transform_request(&request_grpc.get_ref().flatbuffer)
+            .unwrap();
+
+        tracing::info!(?request, "Got request");
+
+        let (tx, rx) = tokio::sync::mpsc::channel(1);
+
+        let engine = self.engine.clone();
+
+        tokio::spawn(
+            async move {
+                let response = match engine.execute_transform(request).await {
+                    Ok(res) => TransformResponse::Success(res),
+                    Err(ExecuteTransformError::InvalidQuery(err)) => {
+                        TransformResponse::InvalidQuery(err)
+                    }
+                    Err(ExecuteTransformError::EngineInternalError(err)) => {
+                        TransformResponse::InternalError(err)
+                    }
+                    Err(ExecuteTransformError::InternalError(err)) => {
+                        let (message, backtrace) = Self::format_error_message_and_backtrace(err);
+                        TransformResponse::InternalError(TransformResponseInternalError {
+                            message,
+                            backtrace,
+                        })
+                    }
+                };
+
+                tracing::info!(?response, "Produced response");
+
+                let response_fb = FlatbuffersEngineProtocol
+                    .write_transform_response(&response)
+                    .unwrap();
+
+                let response_grpc = TransformResponseGRPC {
                     flatbuffer: response_fb.collapse_vec(),
                 };
 

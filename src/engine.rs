@@ -13,7 +13,7 @@ use datafusion::prelude::*;
 use datafusion::scalar::ScalarValue;
 use datafusion::sql::TableReference;
 use internal_error::*;
-use opendatafabric::engine::ExecuteQueryError;
+use opendatafabric::engine::{ExecuteRawQueryError, ExecuteTransformError};
 use opendatafabric::*;
 
 /////////////////////////////////////////////////////////////////////////////////////////
@@ -27,19 +27,87 @@ impl Engine {
         Self {}
     }
 
-    pub async fn execute_query(
-        &self,
-        request: ExecuteQueryRequest,
-    ) -> Result<ExecuteQueryResponseSuccess, ExecuteQueryError> {
-        let Transform::Sql(transform) = request.transform.clone();
-        let vocab = DatasetVocabularyResolved::from(&request.vocab);
-
+    fn new_context(&self) -> SessionContext {
         let cfg = SessionConfig::new()
             .with_information_schema(true)
             .with_default_catalog_and_schema("odf", "odf")
             .with_target_partitions(1);
 
-        let ctx = SessionContext::new_with_config(cfg);
+        SessionContext::new_with_config(cfg)
+    }
+
+    pub async fn execute_raw_query(
+        &self,
+        request: RawQueryRequest,
+    ) -> Result<RawQueryResponseSuccess, ExecuteRawQueryError> {
+        let ctx = self.new_context();
+
+        // Setup input
+        let input = ctx
+            .read_parquet(
+                request
+                    .input_data_paths
+                    .into_iter()
+                    .map(|p| p.as_os_str().to_str().unwrap().to_string())
+                    .collect::<Vec<_>>(),
+                ParquetReadOptions {
+                    file_extension: "",
+                    ..Default::default()
+                },
+            )
+            .await
+            .int_err()?;
+
+        ctx.register_table(TableReference::bare("input"), input.into_view())
+            .int_err()?;
+
+        // Setup queries
+        let Transform::Sql(transform) = request.transform.clone();
+        for step in transform.queries.as_ref().unwrap() {
+            match Self::register_view_for_step(
+                &ctx,
+                step.alias.as_deref().unwrap_or(Self::OUTPUT_VIEW_NAME),
+                &step.query,
+            )
+            .await
+            {
+                Ok(_) => Ok(()),
+                Err(ExecuteTransformError::InvalidQuery(e)) => {
+                    Err(ExecuteRawQueryError::InvalidQuery(
+                        RawQueryResponseInvalidQuery { message: e.message },
+                    ))
+                }
+                Err(ExecuteTransformError::InternalError(e)) => {
+                    Err(ExecuteRawQueryError::InternalError(e))
+                }
+                Err(ExecuteTransformError::EngineInternalError(_)) => unreachable!(),
+            }?;
+        }
+
+        let df = ctx.table(Self::OUTPUT_VIEW_NAME).await.int_err()?;
+        let df = Self::normalize_raw_result(df)?;
+
+        let num_records = self
+            .write_parquet(
+                &request.output_data_path,
+                df,
+                WriterProperties::builder()
+                    .set_writer_version(
+                        datafusion::parquet::file::properties::WriterVersion::PARQUET_1_0,
+                    )
+                    .set_compression(datafusion::parquet::basic::Compression::SNAPPY)
+                    .build(),
+            )
+            .await?;
+
+        Ok(RawQueryResponseSuccess { num_records })
+    }
+
+    pub async fn execute_transform(
+        &self,
+        request: TransformRequest,
+    ) -> Result<TransformResponseSuccess, ExecuteTransformError> {
+        let ctx = self.new_context();
 
         // Setup inputs
         for input in &request.query_inputs {
@@ -47,6 +115,7 @@ impl Engine {
         }
 
         // Setup queries
+        let Transform::Sql(transform) = request.transform.clone();
         for step in transform.queries.as_ref().unwrap() {
             Self::register_view_for_step(
                 &ctx,
@@ -61,25 +130,30 @@ impl Engine {
 
         let df = Self::normalize_raw_result(df)?;
 
-        Self::validate_raw_result(&df, &vocab)?;
+        Self::validate_raw_result(&df, &request.vocab)?;
 
-        let df = Self::with_system_columns(df, &vocab, request.system_time, request.next_offset)
-            .await
-            .int_err()?;
+        let df =
+            Self::with_system_columns(df, &request.vocab, request.system_time, request.next_offset)
+                .await
+                .int_err()?;
 
         let num_rows = self
-            .write_parquet(&request.new_data_path, df, &vocab)
+            .write_parquet(
+                &request.new_data_path,
+                df,
+                self.get_writer_properties(&request.vocab),
+            )
             .await?;
 
         let new_watermark = Self::compute_new_watermark(&request);
 
         if num_rows == 0 {
-            Ok(ExecuteQueryResponseSuccess {
+            Ok(TransformResponseSuccess {
                 new_offset_interval: None,
                 new_watermark,
             })
         } else {
-            Ok(ExecuteQueryResponseSuccess {
+            Ok(TransformResponseSuccess {
                 new_offset_interval: Some(OffsetInterval {
                     start: request.next_offset,
                     end: request.next_offset + num_rows - 1,
@@ -92,8 +166,8 @@ impl Engine {
     #[tracing::instrument(level = "info", skip_all, fields(dataset_id = %input.dataset_id, dataset_alias = %input.dataset_alias, query_alias = %input.query_alias))]
     async fn register_input(
         ctx: &SessionContext,
-        input: &ExecuteQueryRequestInput,
-    ) -> Result<(), ExecuteQueryError> {
+        input: &TransformRequestInput,
+    ) -> Result<(), ExecuteTransformError> {
         use datafusion::parquet::file::reader::{FileReader, SerializedFileReader};
 
         assert!(
@@ -157,11 +231,10 @@ impl Engine {
             "Registering input",
         );
 
-        let vocab = DatasetVocabularyResolved::from(&input.vocab);
         let df = if let Some(offset_interval) = &input.offset_interval {
             df.filter(and(
-                col(&vocab.offset_column as &str).gt_eq(lit(offset_interval.start)),
-                col(&vocab.offset_column as &str).lt_eq(lit(offset_interval.end)),
+                col(&input.vocab.offset_column).gt_eq(lit(offset_interval.start)),
+                col(&input.vocab.offset_column).lt_eq(lit(offset_interval.end)),
             ))
             .int_err()?
         } else {
@@ -178,7 +251,7 @@ impl Engine {
         ctx: &SessionContext,
         name: &str,
         query: &str,
-    ) -> Result<(), ExecuteQueryError> {
+    ) -> Result<(), ExecuteTransformError> {
         tracing::info!(
             view_name = %name,
             query = %query,
@@ -189,7 +262,7 @@ impl Engine {
             Ok(plan) => plan,
             Err(error) => {
                 tracing::debug!(?error, query = %query, "Error when setting up query");
-                return Err(ExecuteQueryResponseInvalidQuery {
+                return Err(TransformResponseInvalidQuery {
                     message: error.to_string(),
                 }
                 .into());
@@ -210,7 +283,7 @@ impl Engine {
     // Computes new watermark as minimum of all inputs
     // This will change when we add support for aggregation, joins and other
     // streaming operations
-    fn compute_new_watermark(request: &ExecuteQueryRequest) -> Option<DateTime<Utc>> {
+    fn compute_new_watermark(request: &TransformRequest) -> Option<DateTime<Utc>> {
         let watermark = request
             .query_inputs
             .iter()
@@ -226,7 +299,7 @@ impl Engine {
     // TODO: This function currently ensures that all timestamps in the ouput are
     // represeted as `Timestamp(Millis, "UTC")` for compatibility with other engines
     // (e.g. Flink does not support event time with nanosecond precision).
-    fn normalize_raw_result(df: DataFrame) -> Result<DataFrame, ExecuteQueryError> {
+    fn normalize_raw_result(df: DataFrame) -> Result<DataFrame, InternalError> {
         let utc_tz: Arc<str> = Arc::from("UTC");
 
         let mut select: Vec<Expr> = Vec::new();
@@ -259,14 +332,14 @@ impl Engine {
 
     fn validate_raw_result(
         df: &DataFrame,
-        vocab: &DatasetVocabularyResolved<'_>,
-    ) -> Result<(), ExecuteQueryError> {
+        vocab: &DatasetVocabulary,
+    ) -> Result<(), ExecuteTransformError> {
         tracing::info!(schema = ?df.schema(), "Computed raw result schema");
 
         let system_columns = [&vocab.offset_column, &vocab.system_time_column];
         for system_column in system_columns {
             if df.schema().has_column_with_unqualified_name(system_column) {
-                return Err(ExecuteQueryResponseInvalidQuery {
+                return Err(TransformResponseInvalidQuery {
                     message: format!(
                         "Transformed data contains a column that conflicts with the system column \
                          name, you should either rename the data column or configure the dataset \
@@ -288,7 +361,7 @@ impl Engine {
             match event_time_col.data_type() {
                 DataType::Date32 | DataType::Date64 => {}
                 DataType::Timestamp(_, None) => {
-                    return Err(ExecuteQueryResponseInvalidQuery {
+                    return Err(TransformResponseInvalidQuery {
                         message: format!(
                             "Event time column '{}' should be adjusted to UTC, but local/naive \
                              timestamp found",
@@ -304,7 +377,7 @@ impl Engine {
                         // Datafusion has very sane (metadata-only) approach to storing timezones.
                         // The fear currently is about compatibility with engines like Spark/Flink
                         // that might interpret it incorrectly. This has to be tested further.
-                        return Err(ExecuteQueryResponseInvalidQuery {
+                        return Err(TransformResponseInvalidQuery {
                             message: format!(
                                 "Event time column '{}' should be adjusted to UTC, but found: {}",
                                 vocab.event_time_column, tz
@@ -314,7 +387,7 @@ impl Engine {
                     }
                 },
                 typ => {
-                    return Err(ExecuteQueryResponseInvalidQuery {
+                    return Err(TransformResponseInvalidQuery {
                         message: format!(
                             "Event time column '{}' should be either Date or Timestamp, but \
                              found: {}",
@@ -325,7 +398,7 @@ impl Engine {
                 }
             }
         } else {
-            return Err(ExecuteQueryResponseInvalidQuery {
+            return Err(TransformResponseInvalidQuery {
                 message: format!(
                     "Event time column {} was not found amongst: {}",
                     vocab.event_time_column,
@@ -345,7 +418,7 @@ impl Engine {
 
     async fn with_system_columns(
         df: DataFrame,
-        vocab: &DatasetVocabularyResolved<'_>,
+        vocab: &DatasetVocabulary,
         system_time: DateTime<Utc>,
         start_offset: u64,
     ) -> Result<DataFrame, DataFusionError> {
@@ -391,9 +464,9 @@ impl Engine {
 
         // Reorder columns for nice looks
         let mut full_columns = vec![
-            vocab.offset_column.to_string(),
-            vocab.system_time_column.to_string(),
-            vocab.event_time_column.to_string(),
+            vocab.offset_column.clone(),
+            vocab.system_time_column.clone(),
+            vocab.event_time_column.clone(),
         ];
         full_columns.append(&mut raw_columns_wo_event_time);
         let full_columns_str: Vec<_> = full_columns.iter().map(String::as_str).collect();
@@ -405,7 +478,7 @@ impl Engine {
     }
 
     // TODO: Externalize configuration
-    fn get_write_properties(&self, vocab: &DatasetVocabularyResolved<'_>) -> WriterProperties {
+    fn get_writer_properties(&self, vocab: &DatasetVocabulary) -> WriterProperties {
         // TODO: `offset` column is sorted integers so we could use delta encoding, but
         // Flink does not support it.
         // See: https://github.com/kamu-data/kamu-engine-flink/issues/3
@@ -413,7 +486,7 @@ impl Engine {
             .set_writer_version(datafusion::parquet::file::properties::WriterVersion::PARQUET_1_0)
             .set_compression(datafusion::parquet::basic::Compression::SNAPPY)
             // system_time value will be the same for all rows in a batch
-            .set_column_dictionary_enabled(vocab.system_time_column.as_ref().into(), true)
+            .set_column_dictionary_enabled(vocab.system_time_column.as_str().into(), true)
             .build()
     }
 
@@ -421,7 +494,7 @@ impl Engine {
         &self,
         path: &Path,
         df: DataFrame,
-        vocab: &DatasetVocabularyResolved<'_>,
+        props: WriterProperties,
     ) -> Result<u64, InternalError> {
         use datafusion::arrow::array::UInt64Array;
 
@@ -431,7 +504,7 @@ impl Engine {
             .write_parquet(
                 path.as_os_str().to_str().unwrap(),
                 DataFrameWriteOptions::new().with_single_file_output(true),
-                Some(self.get_write_properties(vocab)),
+                Some(props),
             )
             .await
             .int_err()?;
