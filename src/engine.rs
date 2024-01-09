@@ -85,7 +85,7 @@ impl Engine {
         }
 
         let df = ctx.table(Self::OUTPUT_VIEW_NAME).await.int_err()?;
-        let df = Self::normalize_raw_result(df)?;
+        let df = Self::normalize_raw_result(df, &DatasetVocabulary::default())?;
 
         let num_records = self
             .write_parquet(
@@ -128,7 +128,7 @@ impl Engine {
         // Get result's execution plan
         let df = ctx.table(Self::OUTPUT_VIEW_NAME).await.int_err()?;
 
-        let df = Self::normalize_raw_result(df)?;
+        let df = Self::normalize_raw_result(df, &request.vocab)?;
 
         Self::validate_raw_result(&df, &request.vocab)?;
 
@@ -299,7 +299,10 @@ impl Engine {
     // TODO: This function currently ensures that all timestamps in the ouput are
     // represeted as `Timestamp(Millis, "UTC")` for compatibility with other engines
     // (e.g. Flink does not support event time with nanosecond precision).
-    fn normalize_raw_result(df: DataFrame) -> Result<DataFrame, InternalError> {
+    fn normalize_raw_result(
+        df: DataFrame,
+        vocab: &DatasetVocabulary,
+    ) -> Result<DataFrame, InternalError> {
         let utc_tz: Arc<str> = Arc::from("UTC");
 
         let mut select: Vec<Expr> = Vec::new();
@@ -317,6 +320,12 @@ impl Engine {
                         DataType::Timestamp(TimeUnit::Millisecond, Some(utc_tz.clone())),
                     )
                     .alias(field.name())
+                }
+                // For compatibility with engines that cannot write correct Parquet logical types we
+                // allow plain INT32, but cast it to UINT8 here
+                DataType::Int32 if *field.name() == vocab.operation_type_column => {
+                    noop = false;
+                    cast(col(field.unqualified_column()), DataType::UInt8).alias(field.name())
                 }
                 _ => col(field.unqualified_column()),
             };
@@ -351,13 +360,30 @@ impl Engine {
             }
         }
 
-        let event_time_col = df
+        if let Some(op_col) = df
             .schema()
-            .fields()
-            .iter()
-            .find(|f| f.name().as_str() == vocab.event_time_column);
+            .fields_with_unqualified_name(&vocab.operation_type_column)
+            .first()
+        {
+            match op_col.data_type() {
+                DataType::UInt8 => {}
+                typ => {
+                    return Err(TransformResponseInvalidQuery {
+                        message: format!(
+                            "Operation type column '{}' should be UInt8, but found: {}",
+                            vocab.operation_type_column, typ
+                        ),
+                    }
+                    .into())
+                }
+            }
+        }
 
-        if let Some(event_time_col) = event_time_col {
+        if let Some(event_time_col) = df
+            .schema()
+            .fields_with_unqualified_name(&vocab.event_time_column)
+            .first()
+        {
             match event_time_col.data_type() {
                 DataType::Date32 | DataType::Date64 => {}
                 DataType::Timestamp(_, None) => {
@@ -423,14 +449,17 @@ impl Engine {
         start_offset: u64,
     ) -> Result<DataFrame, DataFusionError> {
         // Collect non-system column names for later
-        let mut raw_columns_wo_event_time: Vec<_> = df
+        let mut data_columns: Vec<_> = df
             .schema()
             .fields()
             .iter()
             .map(|f| f.name().clone())
-            .filter(|n| n.as_str() != vocab.event_time_column)
+            .filter(|n| {
+                n.as_str() != vocab.event_time_column && n.as_str() != vocab.operation_type_column
+            })
             .collect();
 
+        // Offset
         // TODO: For some reason this adds two collumns: the expected "offset", but also
         // "ROW_NUMBER()" for now we simply filter out the latter.
         let df = df.with_column(
@@ -450,10 +479,24 @@ impl Engine {
             &vocab.offset_column,
             cast(
                 col(&vocab.offset_column as &str) + lit(start_offset as i64 - 1),
-                DataType::Int64,
+                DataType::UInt64,
             ),
         )?;
 
+        // Operation type
+        let df = if !df
+            .schema()
+            .has_column_with_unqualified_name(&vocab.operation_type_column)
+        {
+            df.with_column(
+                &vocab.operation_type_column,
+                lit(OperationType::Append as u8),
+            )?
+        } else {
+            df
+        };
+
+        // System time
         let df = df.with_column(
             &vocab.system_time_column,
             Expr::Literal(ScalarValue::TimestampMillisecond(
@@ -465,10 +508,11 @@ impl Engine {
         // Reorder columns for nice looks
         let mut full_columns = vec![
             vocab.offset_column.clone(),
+            vocab.operation_type_column.clone(),
             vocab.system_time_column.clone(),
             vocab.event_time_column.clone(),
         ];
-        full_columns.append(&mut raw_columns_wo_event_time);
+        full_columns.append(&mut data_columns);
         let full_columns_str: Vec<_> = full_columns.iter().map(String::as_str).collect();
 
         let df = df.select_columns(&full_columns_str)?;
@@ -485,6 +529,8 @@ impl Engine {
         WriterProperties::builder()
             .set_writer_version(datafusion::parquet::file::properties::WriterVersion::PARQUET_1_0)
             .set_compression(datafusion::parquet::basic::Compression::SNAPPY)
+            // op column is low cardinality and best encoded as RLE_DICTIONARY
+            .set_column_dictionary_enabled(vocab.operation_type_column.as_str().into(), true)
             // system_time value will be the same for all rows in a batch
             .set_column_dictionary_enabled(vocab.system_time_column.as_str().into(), true)
             .build()

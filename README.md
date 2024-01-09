@@ -13,15 +13,13 @@ This the implementation of the `Engine` contract of [Open Data Fabric](http://op
 
 
 ## Features
-This engine is experimental and has limited functionality due to being batch-oriented, but is extremely fast and low-footprint. There are [ongoing attempts](https://github.com/apache/arrow-datafusion/issues/4285) to add stream processing functionality.
+This engine is experimental and has limited functionality due to being **batch-oriented**, but is extremely fast and low-footprint. There are [ongoing attempts](https://github.com/apache/arrow-datafusion/issues/4285) to add stream processing functionality.
 
-We recommend using this engine only for **basic filter/map operations** that do not require temporal processing. If you nead temporal JOINs, aggregations, windowing, and watermark semantics - take a look at [Apache Flink ODF Engine](https://github.com/kamu-data/kamu-engine-flink).
+We recommend using this engine only for **basic filter/map operations** that do not require temporal processing. If you need temporal JOINs, aggregations, windowing, and watermark semantics - take a look at [Apache Flink ODF Engine](https://github.com/kamu-data/kamu-engine-flink).
+
+Also note that this engine does not automatically handle **retractions and corrections**. If you perform map/filter operations on the stream that can contain retractions and corrections - make sure to manually propagate the `op` column. If output does not contain an `op` column - all emitted records will be considered as appends.
 
 More information and engine comparisons are [available here](https://docs.kamu.dev/cli/supported-engines/).
-
-
-## Known Issues
-- None
 
 
 ## Developing

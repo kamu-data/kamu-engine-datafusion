@@ -1,6 +1,6 @@
 [package]
 name = "kamu-engine-datafusion"
-version = "0.6.0"
+version = "0.7.0"
 authors = ["Kamu Data Inc. <info@kamu.dev>"]
 license-file = "LICENSE.txt"
 edition = "2021"
@@ -15,8 +15,8 @@ doctest = false
 # Kamu
 #internal-error = { git = "https://github.com/kamu-data/kamu-cli", tag = "v0.128.0", version = "0.128.0", default-features = false }
 #opendatafabric = { git = "https://github.com/kamu-data/kamu-cli", tag = "v0.128.0", version = "0.128.0", default-features = false }
-internal-error = { git = "https://github.com/kamu-data/kamu-cli", version = "0.150.0", branch = "feature/ingest-preprocessing-with-any-engine", default-features = false }
-opendatafabric = { git = "https://github.com/kamu-data/kamu-cli", version = "0.150.0", branch = "feature/ingest-preprocessing-with-any-engine", default-features = false }
+internal-error = { git = "https://github.com/kamu-data/kamu-cli", version = "0.150.0", branch = "feature/unified-schema", default-features = false }
+opendatafabric = { git = "https://github.com/kamu-data/kamu-cli", version = "0.150.0", branch = "feature/unified-schema", default-features = false }
 
 # Egine
 datafusion = "34"
@@ -37,6 +37,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [dev-dependencies]
 env_logger = "0.10"
+pretty_assertions = "1"
 tempfile = "3"
 test-log = { version = "0.2", features = ["trace"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
