@@ -127,8 +127,10 @@ impl Engine {
 
         // Get result's execution plan
         let df = ctx.table(Self::OUTPUT_VIEW_NAME).await.int_err()?;
+        tracing::info!(schema = ?df.schema(), "Raw result schema");
 
         let df = Self::normalize_raw_result(df, &request.vocab)?;
+        tracing::info!(schema = ?df.schema(), "Normalized result schema");
 
         Self::validate_raw_result(&df, &request.vocab)?;
 
@@ -321,11 +323,17 @@ impl Engine {
                     )
                     .alias(field.name())
                 }
-                // For compatibility with engines that cannot write correct Parquet logical types we
-                // allow plain INT32, but cast it to UINT8 here
-                DataType::Int32 if *field.name() == vocab.operation_type_column => {
+                // TODO: Normalize towards UInt8 after Spark is updated
+                // See: https://github.com/kamu-data/kamu-cli/issues/445
+                DataType::Int8
+                | DataType::UInt8
+                | DataType::Int16
+                | DataType::UInt16
+                | DataType::UInt32
+                    if *field.name() == vocab.operation_type_column =>
+                {
                     noop = false;
-                    cast(col(field.unqualified_column()), DataType::UInt8).alias(field.name())
+                    cast(col(field.unqualified_column()), DataType::Int32).alias(field.name())
                 }
                 _ => col(field.unqualified_column()),
             };
@@ -343,8 +351,6 @@ impl Engine {
         df: &DataFrame,
         vocab: &DatasetVocabulary,
     ) -> Result<(), ExecuteTransformError> {
-        tracing::info!(schema = ?df.schema(), "Computed raw result schema");
-
         let system_columns = [&vocab.offset_column, &vocab.system_time_column];
         for system_column in system_columns {
             if df.schema().has_column_with_unqualified_name(system_column) {
@@ -366,11 +372,13 @@ impl Engine {
             .first()
         {
             match op_col.data_type() {
-                DataType::UInt8 => {}
+                // TODO: Require UInt8 after Spark is updated
+                // See: https://github.com/kamu-data/kamu-cli/issues/445
+                DataType::Int32 => {}
                 typ => {
                     return Err(TransformResponseInvalidQuery {
                         message: format!(
-                            "Operation type column '{}' should be UInt8, but found: {}",
+                            "Operation type column '{}' should be Int32, but found: {}",
                             vocab.operation_type_column, typ
                         ),
                     }
@@ -475,11 +483,13 @@ impl Engine {
             }),
         )?;
 
+        // TODO: Cast to UInt64 after Spark is updated
+        // See: https://github.com/kamu-data/kamu-cli/issues/445
         let df = df.with_column(
             &vocab.offset_column,
             cast(
                 col(&vocab.offset_column as &str) + lit(start_offset as i64 - 1),
-                DataType::UInt64,
+                DataType::Int64,
             ),
         )?;
 
@@ -490,7 +500,9 @@ impl Engine {
         {
             df.with_column(
                 &vocab.operation_type_column,
-                lit(OperationType::Append as u8),
+                // TODO: Cast to u8 after Spark is updated
+                // See: https://github.com/kamu-data/kamu-cli/issues/445
+                lit(OperationType::Append as i32),
             )?
         } else {
             df
@@ -572,6 +584,6 @@ impl Engine {
             tracing::info!("Produced empty result",);
             let _ = std::fs::remove_file(path);
         }
-        Ok(num_records)
+        Ok(num_records as u64)
     }
 }

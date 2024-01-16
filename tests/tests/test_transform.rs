@@ -53,15 +53,17 @@ fn write_sample_data(path: impl AsRef<Path>, data: &[Record]) {
     use datafusion::arrow::datatypes::{DataType, Field, Schema, TimeUnit};
     use datafusion::arrow::record_batch::RecordBatch;
 
+    // TODO: Replace with UInt64 and UInt8 after Spark is updated
+    // See: https://github.com/kamu-data/kamu-cli/issues/445
     let schema = Arc::new(Schema::new(vec![
         Field::new(
             DatasetVocabulary::DEFAULT_OFFSET_COLUMN_NAME,
-            DataType::UInt64,
+            DataType::Int64,
             false,
         ),
         Field::new(
             DatasetVocabulary::DEFAULT_OPERATION_TYPE_COLUMN_NAME,
-            DataType::UInt8,
+            DataType::Int32,
             false,
         ),
         Field::new(
@@ -81,11 +83,11 @@ fn write_sample_data(path: impl AsRef<Path>, data: &[Record]) {
     let record_batch = RecordBatch::try_new(
         schema,
         vec![
-            Arc::new(array::UInt64Array::from(
-                data.iter().map(|r| r.offset).collect::<Vec<_>>(),
+            Arc::new(array::Int64Array::from(
+                data.iter().map(|r| r.offset as i64).collect::<Vec<_>>(),
             )),
-            Arc::new(array::UInt8Array::from(
-                data.iter().map(|r| r.op as u8).collect::<Vec<_>>(),
+            Arc::new(array::Int32Array::from(
+                data.iter().map(|r| r.op as i32).collect::<Vec<_>>(),
             )),
             Arc::new(
                 array::TimestampMillisecondArray::from(
@@ -315,8 +317,8 @@ async fn test_result_schema() {
         expected_schema: Some(indoc!(
             r#"
             message arrow_schema {
-              OPTIONAL INT64 offset (INTEGER(64,false));
-              REQUIRED INT32 op (INTEGER(8,false));
+              OPTIONAL INT64 offset;
+              REQUIRED INT32 op;
               REQUIRED INT64 system_time (TIMESTAMP(MILLIS,true));
               REQUIRED INT64 event_time (TIMESTAMP(MILLIS,true));
               REQUIRED BYTE_ARRAY city (STRING);
@@ -337,8 +339,8 @@ async fn test_result_optimal_parquet_encoding() {
         expected_schema: Some(indoc!(
             r#"
             message arrow_schema {
-              OPTIONAL INT64 offset (INTEGER(64,false));
-              REQUIRED INT32 op (INTEGER(8,false));
+              OPTIONAL INT64 offset;
+              REQUIRED INT32 op;
               REQUIRED INT64 system_time (TIMESTAMP(MILLIS,true));
               REQUIRED INT64 event_time (TIMESTAMP(MILLIS,true));
               REQUIRED BYTE_ARRAY city (STRING);
@@ -667,8 +669,8 @@ async fn test_event_time_coerced_to_millis() {
         expected_schema: Some(indoc!(
             r#"
             message arrow_schema {
-              OPTIONAL INT64 offset (INTEGER(64,false));
-              REQUIRED INT32 op (INTEGER(8,false));
+              OPTIONAL INT64 offset;
+              REQUIRED INT32 op;
               REQUIRED INT64 system_time (TIMESTAMP(MILLIS,true));
               REQUIRED INT64 event_time (TIMESTAMP(MILLIS,true));
               REQUIRED BYTE_ARRAY city (STRING);
