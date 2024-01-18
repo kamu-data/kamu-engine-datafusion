@@ -13,10 +13,10 @@ doctest = false
 
 [dependencies]
 # Kamu
-#internal-error = { git = "https://github.com/kamu-data/kamu-cli", tag = "v0.128.0", version = "0.128.0", default-features = false }
-#opendatafabric = { git = "https://github.com/kamu-data/kamu-cli", tag = "v0.128.0", version = "0.128.0", default-features = false }
-internal-error = { git = "https://github.com/kamu-data/kamu-cli", version = "0.150.0", branch = "feature/unified-schema", default-features = false }
-opendatafabric = { git = "https://github.com/kamu-data/kamu-cli", version = "0.150.0", branch = "feature/unified-schema", default-features = false }
+internal-error = { git = "https://github.com/kamu-data/kamu-cli", tag = "v0.153.0", version = "0.153.0", default-features = false }
+opendatafabric = { git = "https://github.com/kamu-data/kamu-cli", tag = "v0.153.0", version = "0.153.0", default-features = false }
+# internal-error = { git = "https://github.com/kamu-data/kamu-cli", version = "0.150.0", branch = "feature/unified-schema", default-features = false }
+# opendatafabric = { git = "https://github.com/kamu-data/kamu-cli", version = "0.150.0", branch = "feature/unified-schema", default-features = false }
 
 # Egine
 datafusion = "34"
