@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.2] - 2024-02-08
+### Added
+- Building `arm64` version of the image to support Apple M-series silicon without QEMU overhead 
+
 ## [0.7.1] - 2024-01-15
 ### Changed
 - Reverted to use `int32` and `int64` for `op` and `offset` respectively to preserve compatibility with Spark engine until Spark's Parquet version is upgraded.

@@ -11,18 +11,13 @@ jobs:
         include:
           - runs-on: ubuntu-latest
             target: x86_64-unknown-linux-musl
-          # - runs-on: macos-14
-          #   target: aarch64-apple-darwin
+            image-platform: linux/amd64
+          - runs-on: ubuntu-latest
+            target: aarch64-unknown-linux-musl
+            image-platform: linux/arm/v8
     name: Build
     runs-on: ${{ matrix.runs-on }}
     steps:
-      - name: Setup variables
-        run: |
-          TAG=${{ github.ref }}
-          VERSION=${TAG#v}
-          echo "VERSION=$VERSION" >> $GITHUB_ENV
-          echo "IMAGE=ghcr.io/kamu-data/engine-datafusion:$VERSION" >> $GITHUB_ENV
-
       - uses: actions/checkout@v4
 
       - uses: actions-rs/toolchain@v1
@@ -30,39 +25,23 @@ jobs:
           target: ${{ matrix.target }}
           override: true
 
-      - name: Install docker (macOS)
-        if: contains(matrix.runs-on, 'macos-')
-        # See: https://blog.netnerds.net/2022/11/docker-macos-github-actions/
+      - name: Install cross
+        run: cargo install cross --locked
+
+      - name: Build binary
         run: |
-          brew install docker
-          colima start
-      
+          make build TARGET_ARCH=${{ matrix.target }}
+
+      - name: Build image
+        run: |
+          make image IMAGE_PLATFORM=${{ matrix.image-platform }} TARGET_ARCH=${{ matrix.target }}
+
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Install musl (linux)
-        if: contains(matrix.target, '-musl')
-        # See: https://blog.urth.org/2023/03/05/cross-compiling-rust-projects-in-github-actions/
-        run: |
-          sudo apt-get update --yes
-          sudo apt-get install --yes musl-tools
-
-      - name: Build engine
-        run: |
-          cargo build --release --target ${{ matrix.target }}
-      
-      - name: Build image
-        run: |
-          docker build \
-            --build-arg target_arch=${{ matrix.target }} \
-            --build-arg version=${{ env.VERSION }} \
-            -t ${{ env.IMAGE }} \
-            -f image/Dockerfile \
-            .
 
       - name: Publish image
         run: |
@@ -73,6 +52,11 @@ jobs:
     runs-on: ubuntu-latest
     needs: [build]
     steps:
+      - uses: actions/checkout@v4
+      # Sets the header for the release description
+      - run: echo "" > RELEASE_HEAD.md
+      # Extracts relevant section from CHANGELOG.md and outputs it into RELEASE.md
+      - uses: CSchoel/release-notes-from-changelog@v1
       - name: Create Release
         id: create_release
         uses: actions/create-release@v1
@@ -83,5 +67,6 @@ jobs:
           release_name: Release ${{ github.ref }}
           draft: false
           prerelease: false
+          body_path: RELEASE.md
     outputs:
       upload_url: ${{ steps.create_release.outputs.upload_url }}
