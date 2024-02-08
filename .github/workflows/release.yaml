@@ -45,7 +45,7 @@ jobs:
 
       - name: Publish image
         run: |
-          docker push ${{ env.IMAGE }}
+          make image-push IMAGE_PLATFORM=${{ matrix.image-platform }} TARGET_ARCH=${{ matrix.target }}
 
   create_release:
     name: Create Release
