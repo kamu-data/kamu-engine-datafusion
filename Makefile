@@ -1,8 +1,8 @@
 TARGET_ARCH = x86_64-unknown-linux-musl
-ENGINE_VERSION = $(shell cargo metadata --format-version 1 | jq -r '.packages[] | select( .name == "kamu-engine-datafusion") | .version')
-ENGINE_IMAGE_TAG = $(ENGINE_VERSION)
-ENGINE_IMAGE = ghcr.io/kamu-data/engine-datafusion:$(ENGINE_IMAGE_TAG)
-ENGINE_IMAGE_PLATFORM = linux/amd64
+IMAGE_PLATFORM = linux/amd64
+CRATE_VERSION = $(shell cargo metadata --format-version 1 | jq -r '.packages[] | select( .name == "kamu-engine-datafusion") | .version')
+IMAGE_TAG = $(CRATE_VERSION)
+IMAGE = ghcr.io/kamu-data/engine-datafusion:$(IMAGE_TAG)
 
 
 ###############################################################################
@@ -36,17 +36,17 @@ build:
 .PHONY: image
 image:
 	docker build \
-	    --platform $(ENGINE_IMAGE_PLATFORM) \
+	    --platform $(IMAGE_PLATFORM) \
 		--build-arg target_arch=$(TARGET_ARCH) \
-		--build-arg version=$(ENGINE_VERSION) \
-		-t $(ENGINE_IMAGE) \
+		--build-arg version=$(CRATE_VERSION) \
+		-t $(IMAGE) \
 		-f image/Dockerfile \
 		.
 
 
 .PHONY: image-push
 image-push:
-	docker push $(ENGINE_IMAGE)
+	docker push $(IMAGE)
 
 
 ###############################################################################
