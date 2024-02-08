@@ -5,21 +5,40 @@ on:
       - v[0-9]+.[0-9]+.[0-9]+*
 jobs:
   build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runs-on: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            
+          - runs-on: macos-14
+            target: aarch64-apple-darwin
     name: Build
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.runs-on }}
     steps:
+      - name: Setup variables
+        run: |
+          TAG=${{ github.event.release.tag_name }}
+          VERSION=${TAG#v}
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
+          echo "IMAGE=ghcr.io/kamu-data/engine-datafusion:$VERSION" >> $GITHUB_ENV
       - uses: actions/checkout@v4
       - uses: actions-rs/toolchain@v1
         with:
+          target: ${{ matrix.target }}
           override: true
-      - name: Install cross
-        run: cargo install cross --locked
       - name: Build engine
         run: |
-          make build
+          cargo build --release --target ${{ matrix.target }}
       - name: Build image
         run: |
-          make image
+          docker build \
+            --build-arg target_arch=${{ matrix.target }} \
+            --build-arg version=${{ env.VERSION }} \
+            -t ${{ env.IMAGE }} \
+            -f image/Dockerfile \
+            .
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@v3
         with:
@@ -28,7 +47,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Publish image
         run: |
-          make image-push
+          docker push ${{ env.IMAGE }}
   create_release:
     name: Create Release
     runs-on: ubuntu-latest

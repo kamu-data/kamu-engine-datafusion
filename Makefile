@@ -27,6 +27,7 @@ test:
 # Build
 ###############################################################################
 
+# Do not use except for local testing - release images are built via CI
 .PHONY: build
 build:
 	RUSTFLAGS="" cross build --release --target $(TARGET_ARCH)

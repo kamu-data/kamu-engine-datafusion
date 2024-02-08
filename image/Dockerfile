@@ -1,5 +1,5 @@
 # TODO: Consider using https://github.com/GoogleContainerTools/distroless
-FROM docker.io/library/alpine:3.18.0
+FROM docker.io/library/alpine:3.19
 ARG target_arch
 ARG version
 LABEL name="Apache Arrow Datafusion ODF Engine" \
