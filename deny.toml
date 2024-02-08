@@ -13,6 +13,7 @@ skip-tree = [
     { name = "redox_syscall" },                 # via parking-lot
     { name = "regex-syntax" },                  # via tracing-subscriber
     { name = "regex-automata" },                # via matchers
+    { name = "syn" },                           # TODO: waiting for snafu to update to v2
     { name = "tracing-log" },                   # TODO: remove bunyan log formatter
     { name = "windows-sys" },
 ]

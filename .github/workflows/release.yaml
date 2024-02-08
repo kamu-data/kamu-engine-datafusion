@@ -11,23 +11,25 @@ jobs:
         include:
           - runs-on: ubuntu-latest
             target: x86_64-unknown-linux-musl
-          - runs-on: macos-14
-            target: aarch64-apple-darwin
+          # - runs-on: macos-14
+          #   target: aarch64-apple-darwin
     name: Build
     runs-on: ${{ matrix.runs-on }}
     steps:
       - name: Setup variables
         run: |
-          TAG=${{ github.event.release.tag_name }}
+          TAG=${{ github.ref }}
           VERSION=${TAG#v}
           echo "VERSION=$VERSION" >> $GITHUB_ENV
           echo "IMAGE=ghcr.io/kamu-data/engine-datafusion:$VERSION" >> $GITHUB_ENV
+
       - uses: actions/checkout@v4
+
       - uses: actions-rs/toolchain@v1
         with:
           target: ${{ matrix.target }}
           override: true
-      
+
       - name: Install docker (macOS)
         if: contains(matrix.runs-on, 'macos-')
         # See: https://blog.netnerds.net/2022/11/docker-macos-github-actions/
@@ -48,7 +50,7 @@ jobs:
         run: |
           sudo apt-get update --yes
           sudo apt-get install --yes musl-tools
-      
+
       - name: Build engine
         run: |
           cargo build --release --target ${{ matrix.target }}
@@ -61,9 +63,11 @@ jobs:
             -t ${{ env.IMAGE }} \
             -f image/Dockerfile \
             .
+
       - name: Publish image
         run: |
           docker push ${{ env.IMAGE }}
+
   create_release:
     name: Create Release
     runs-on: ubuntu-latest
