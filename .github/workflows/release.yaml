@@ -5,6 +5,12 @@ on:
       - v[0-9]+.[0-9]+.[0-9]+*
 env:
   IMAGE_BASE_NAME: ghcr.io/kamu-data/engine-datafusion
+  # See: https://github.com/docker/metadata-action#tags-input
+  IMAGE_TAGS: |
+    type=raw,value=latest
+    type=semver,pattern={{major}}
+    type=semver,pattern={{major}}.{{minor}}
+    type=semver,pattern={{version}}
   IMAGE_LABELS: |
     org.opencontainers.image.vendor=Kamu Data Inc.
 jobs:
@@ -32,6 +38,7 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ${{ env.IMAGE_BASE_NAME }}
+          tags: ${{ env.IMAGE_TAGS }}
           labels: ${{ env.IMAGE_LABELS }}
 
       - name: Set up QEMU
@@ -111,6 +118,7 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ${{ env.IMAGE_BASE_NAME }}
+          tags: ${{ env.IMAGE_TAGS }}
           labels: ${{ env.IMAGE_LABELS }}
 
       - name: Log in to GitHub Container Registry
