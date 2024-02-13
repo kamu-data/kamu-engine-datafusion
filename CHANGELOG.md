@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+### Changed
+- Updated Rust toolchain and minor dependencies
+
 ## [0.7.2] - 2024-02-08
 ### Added
 - Building `arm64` version of the image to support Apple M-series silicon without QEMU overhead 
