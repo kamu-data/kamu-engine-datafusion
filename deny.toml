@@ -8,13 +8,16 @@ workspace-default-features = "deny"
 # Avoid adding dependencies to this list as this slows down compilation.
 # Find another ways to avoid duplication.
 skip-tree = [
-    { name = "indexmap" },                      # TODO: multiple libraries need to update to v2
+    { name = "base64" },         # http v1 upgrade
+    { name = "heck" },           # via arrow and datafusion
+    { name = "indexmap" },       # TODO: multiple libraries need to update to v2
     { name = "itertools" },
-    { name = "redox_syscall" },                 # via parking-lot
-    { name = "regex-syntax" },                  # via tracing-subscriber
-    { name = "regex-automata" },                # via matchers
-    { name = "syn" },                           # TODO: waiting for snafu to update to v2
-    { name = "tracing-log" },                   # TODO: remove bunyan log formatter
+    { name = "miniz_oxide" },
+    { name = "redox_syscall" },  # via parking-lot
+    { name = "regex-syntax" },   # via tracing-subscriber
+    { name = "regex-automata" }, # via matchers
+    { name = "syn" },            # TODO: waiting for snafu to update to v2
+    { name = "tracing-log" },    # TODO: remove bunyan log formatter
     { name = "windows-sys" },
 ]
 deny = [
@@ -35,7 +38,6 @@ allow = [
     "MIT",
     "Zlib",
 ]
-copyleft = "deny"
 private = { ignore = true }
 
 [[licenses.exceptions]]
@@ -46,9 +48,7 @@ name = "unicode-ident"
 [[licenses.clarify]]
 name = "ring"
 expression = "MIT AND ISC AND OpenSSL"
-license-files = [
-    { path = "LICENSE", hash = 0xbd0eed23 }
-]
+license-files = [{ path = "LICENSE", hash = 0xbd0eed23 }]
 
 
 [sources]
@@ -58,11 +58,5 @@ allow-org = { github = ["kamu-data"] }
 
 
 [advisories]
-vulnerability = "deny"
-unmaintained = "warn"
-unsound = "warn"
 yanked = "deny"
-notice = "warn"
-ignore = [
-]
-
+ignore = []

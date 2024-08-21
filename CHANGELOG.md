@@ -6,7 +6,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 ### Changed
-- Updated Rust toolchain and minor dependencies
+- Breaking: Using DataFusion's [`enable_ident_normalization = false`](https://datafusion.apache.org/user-guide/configs.html) setting to work with upper case identifiers without needing to put quotes everywhere
+- Updated Rust toolchain
+- Updated to `datafusion v41`
+### Added
+- Exposed JSON extensions from [`datafusion-functions-json`](https://github.com/datafusion-contrib/datafusion-functions-json) library
 
 ## [0.7.2] - 2024-02-08
 ### Added

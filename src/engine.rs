@@ -1,14 +1,15 @@
+use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use datafusion::arrow::datatypes::{DataType, TimeUnit};
+use datafusion::config::{ParquetColumnOptions, ParquetOptions, TableParquetOptions};
 use datafusion::dataframe::DataFrameWriteOptions;
 use datafusion::error::DataFusionError;
 use datafusion::logical_expr as expr;
 use datafusion::logical_expr::expr::WindowFunction;
 use datafusion::logical_expr::{CreateView, DdlStatement, LogicalPlan};
-use datafusion::parquet::file::properties::WriterProperties;
 use datafusion::prelude::*;
 use datafusion::scalar::ScalarValue;
 use datafusion::sql::TableReference;
@@ -28,12 +29,25 @@ impl Engine {
     }
 
     fn new_context(&self) -> SessionContext {
-        let cfg = SessionConfig::new()
+        let mut cfg = SessionConfig::new()
             .with_information_schema(true)
             .with_default_catalog_and_schema("odf", "odf")
             .with_target_partitions(1);
 
-        SessionContext::new_with_config(cfg)
+        // Forcing cese-sensitive identifiers in case-insensitive language seems to
+        // be a lesser evil than following DataFusion's default behavior of forcing
+        // identifiers to lowercase instead of case-insensitive matching.
+        //
+        // See: https://github.com/apache/datafusion/issues/7460
+        // TODO: Consider externalizing this config (e.g. by allowing custom engine
+        // options in transform DTOs)
+        cfg.options_mut().sql_parser.enable_ident_normalization = false;
+
+        let mut ctx = SessionContext::new_with_config(cfg);
+
+        datafusion_functions_json::register_all(&mut ctx).unwrap();
+
+        ctx
     }
 
     pub async fn execute_raw_query(
@@ -91,12 +105,15 @@ impl Engine {
             .write_parquet(
                 &request.output_data_path,
                 df,
-                WriterProperties::builder()
-                    .set_writer_version(
-                        datafusion::parquet::file::properties::WriterVersion::PARQUET_1_0,
-                    )
-                    .set_compression(datafusion::parquet::basic::Compression::SNAPPY)
-                    .build(),
+                TableParquetOptions {
+                    global: ParquetOptions {
+                        writer_version: "1.0".into(),
+                        compression: Some("snappy".into()),
+                        ..Default::default()
+                    },
+                    column_specific_options: HashMap::new(),
+                    key_value_metadata: HashMap::new(),
+                },
             )
             .await?;
 
@@ -235,16 +252,20 @@ impl Engine {
 
         let df = if let Some(offset_interval) = &input.offset_interval {
             df.filter(and(
-                col(&input.vocab.offset_column).gt_eq(lit(offset_interval.start)),
-                col(&input.vocab.offset_column).lt_eq(lit(offset_interval.end)),
+                col(Column::from_name(&input.vocab.offset_column))
+                    .gt_eq(lit(offset_interval.start)),
+                col(Column::from_name(&input.vocab.offset_column)).lt_eq(lit(offset_interval.end)),
             ))
             .int_err()?
         } else {
             df.filter(lit(false)).int_err()?
         };
 
-        ctx.register_table(TableReference::bare(&input.query_alias), df.into_view())
-            .int_err()?;
+        ctx.register_table(
+            TableReference::bare(input.query_alias.as_str()),
+            df.into_view(),
+        )
+        .int_err()?;
 
         Ok(())
     }
@@ -272,7 +293,7 @@ impl Engine {
         };
 
         let create_view = LogicalPlan::Ddl(DdlStatement::CreateView(CreateView {
-            name: TableReference::bare(name).to_owned_reference(),
+            name: TableReference::bare(name),
             input: Arc::new(logical_plan),
             or_replace: false,
             definition: Some(query.to_string()),
@@ -291,7 +312,7 @@ impl Engine {
             .iter()
             .filter_map(|i| i.explicit_watermarks.iter().map(|wm| &wm.event_time).max())
             .min()
-            .map(|dt| dt.clone());
+            .copied();
 
         tracing::info!(?watermark, "Computed ouptut watermark");
 
@@ -313,12 +334,12 @@ impl Engine {
         for field in df.schema().fields() {
             let expr = match field.data_type() {
                 DataType::Timestamp(TimeUnit::Millisecond, Some(tz)) if tz.as_ref() == "UTC" => {
-                    col(field.unqualified_column())
+                    col(Column::from_name(field.name()))
                 }
                 DataType::Timestamp(_, _) => {
                     noop = false;
                     cast(
-                        col(field.unqualified_column()),
+                        col(Column::from_name(field.name())),
                         DataType::Timestamp(TimeUnit::Millisecond, Some(utc_tz.clone())),
                     )
                     .alias(field.name())
@@ -333,9 +354,9 @@ impl Engine {
                     if *field.name() == vocab.operation_type_column =>
                 {
                     noop = false;
-                    cast(col(field.unqualified_column()), DataType::Int32).alias(field.name())
+                    cast(col(Column::from_name(field.name())), DataType::Int32).alias(field.name())
                 }
-                _ => col(field.unqualified_column()),
+                _ => col(Column::from_name(field.name())),
             };
             select.push(expr);
         }
@@ -473,13 +494,15 @@ impl Engine {
         let df = df.with_column(
             &vocab.offset_column,
             Expr::WindowFunction(WindowFunction {
-                fun: expr::WindowFunction::BuiltInWindowFunction(
+                fun: expr::WindowFunctionDefinition::BuiltInWindowFunction(
                     expr::BuiltInWindowFunction::RowNumber,
                 ),
                 args: vec![],
                 partition_by: vec![],
-                order_by: vec![],
-                window_frame: expr::WindowFrame::new(false),
+                // TODO: Can this potentially lead to reordering?
+                order_by: vec![Expr::Literal(ScalarValue::Null).sort(true, false)],
+                window_frame: expr::WindowFrame::new(Some(false)),
+                null_treatment: None,
             }),
         )?;
 
@@ -488,7 +511,7 @@ impl Engine {
         let df = df.with_column(
             &vocab.offset_column,
             cast(
-                col(&vocab.offset_column as &str) + lit(start_offset as i64 - 1),
+                col(Column::from_name(&vocab.offset_column)) + lit(start_offset as i64 - 1),
                 DataType::Int64,
             ),
         )?;
@@ -534,25 +557,43 @@ impl Engine {
     }
 
     // TODO: Externalize configuration
-    fn get_writer_properties(&self, vocab: &DatasetVocabulary) -> WriterProperties {
+    fn get_writer_properties(&self, vocab: &DatasetVocabulary) -> TableParquetOptions {
         // TODO: `offset` column is sorted integers so we could use delta encoding, but
         // Flink does not support it.
         // See: https://github.com/kamu-data/kamu-engine-flink/issues/3
-        WriterProperties::builder()
-            .set_writer_version(datafusion::parquet::file::properties::WriterVersion::PARQUET_1_0)
-            .set_compression(datafusion::parquet::basic::Compression::SNAPPY)
-            // op column is low cardinality and best encoded as RLE_DICTIONARY
-            .set_column_dictionary_enabled(vocab.operation_type_column.as_str().into(), true)
-            // system_time value will be the same for all rows in a batch
-            .set_column_dictionary_enabled(vocab.system_time_column.as_str().into(), true)
-            .build()
+        TableParquetOptions {
+            global: ParquetOptions {
+                writer_version: "1.0".into(),
+                compression: Some("snappy".into()),
+                ..Default::default()
+            },
+            column_specific_options: HashMap::from([
+                (
+                    // op column is low cardinality and best encoded as RLE_DICTIONARY
+                    vocab.operation_type_column.clone(),
+                    ParquetColumnOptions {
+                        dictionary_enabled: Some(true),
+                        ..Default::default()
+                    },
+                ),
+                (
+                    vocab.system_time_column.clone(),
+                    ParquetColumnOptions {
+                        // system_time value will be the same for all rows in a batch
+                        dictionary_enabled: Some(true),
+                        ..Default::default()
+                    },
+                ),
+            ]),
+            key_value_metadata: HashMap::new(),
+        }
     }
 
     async fn write_parquet(
         &self,
         path: &Path,
         df: DataFrame,
-        props: WriterProperties,
+        props: TableParquetOptions,
     ) -> Result<u64, InternalError> {
         use datafusion::arrow::array::UInt64Array;
 

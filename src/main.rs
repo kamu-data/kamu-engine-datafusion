@@ -49,11 +49,10 @@ fn init_logging() {
     LogTracer::init().expect("Failed to set LogTracer");
 
     // Use configuration from RUST_LOG env var if provided
-    let env_filter = EnvFilter::try_from_default_env()
-        .unwrap_or(EnvFilter::new(DEFAULT_LOGGING_CONFIG.to_owned()));
+    let env_filter =
+        EnvFilter::try_from_default_env().unwrap_or(EnvFilter::new(DEFAULT_LOGGING_CONFIG));
 
-    // TODO: Use non-blocking writer?
-    // Configure Bunyan JSON formatter
+    // TODO: Switch to standard tracing format
     let formatting_layer = BunyanFormattingLayer::new(BINARY_NAME.to_owned(), std::io::stdout);
     let subscriber = Registry::default()
         .with(env_filter)

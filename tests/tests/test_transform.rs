@@ -686,6 +686,80 @@ async fn test_event_time_coerced_to_millis() {
 ///////////////////////////////////////////////////////////////////////////////
 
 #[test_log::test(tokio::test)]
+async fn test_ident_case_sensitivity() {
+    test_query_common(TestQueryCommonOpts {
+        queries: Some(vec![SqlQueryStep {
+            alias: None,
+            query: "select event_time, city as City, population as Population from foo".to_string(),
+        }]),
+        expected_data: Some(Some(indoc!(
+            r#"
+            +--------+----+----------------------+----------------------+-----------+------------+
+            | offset | op | system_time          | event_time           | City      | Population |
+            +--------+----+----------------------+----------------------+-----------+------------+
+            | 0      | 0  | 2023-03-01T00:00:00Z | 2023-01-01T00:00:00Z | vancouver | 675000     |
+            | 1      | 0  | 2023-03-01T00:00:00Z | 2023-01-01T00:00:00Z | seattle   | 733000     |
+            | 2      | 0  | 2023-03-01T00:00:00Z | 2023-01-01T00:00:00Z | kyiv      | 2884000    |
+            +--------+----+----------------------+----------------------+-----------+------------+
+            "#,
+        ))),
+        expected_schema: Some(indoc!(
+            r#"
+            message arrow_schema {
+              OPTIONAL INT64 offset;
+              REQUIRED INT32 op;
+              REQUIRED INT64 system_time (TIMESTAMP(MILLIS,true));
+              REQUIRED INT64 event_time (TIMESTAMP(MILLIS,true));
+              REQUIRED BYTE_ARRAY City (STRING);
+              REQUIRED INT64 Population (INTEGER(64,false));
+            }
+            "#,
+        )),
+        ..Default::default()
+    })
+    .await
+}
+
+///////////////////////////////////////////////////////////////////////////////
+
+#[test_log::test(tokio::test)]
+async fn test_json_extensions() {
+    test_query_common(TestQueryCommonOpts {
+        queries: Some(vec![SqlQueryStep {
+            alias: None,
+            query: r#"select event_time, json_get_int('{"foo": 123}', 'foo') as value from foo"#
+                .to_string(),
+        }]),
+        expected_data: Some(Some(indoc!(
+            r#"
+            +--------+----+----------------------+----------------------+-------+
+            | offset | op | system_time          | event_time           | value |
+            +--------+----+----------------------+----------------------+-------+
+            | 0      | 0  | 2023-03-01T00:00:00Z | 2023-01-01T00:00:00Z | 123   |
+            | 1      | 0  | 2023-03-01T00:00:00Z | 2023-01-01T00:00:00Z | 123   |
+            | 2      | 0  | 2023-03-01T00:00:00Z | 2023-01-01T00:00:00Z | 123   |
+            +--------+----+----------------------+----------------------+-------+
+            "#,
+        ))),
+        expected_schema: Some(indoc!(
+            r#"
+            message arrow_schema {
+              OPTIONAL INT64 offset;
+              REQUIRED INT32 op;
+              REQUIRED INT64 system_time (TIMESTAMP(MILLIS,true));
+              REQUIRED INT64 event_time (TIMESTAMP(MILLIS,true));
+              REQUIRED INT64 value;
+            }
+            "#,
+        )),
+        ..Default::default()
+    })
+    .await
+}
+
+///////////////////////////////////////////////////////////////////////////////
+
+#[test_log::test(tokio::test)]
 async fn test_propagates_retractions_corrections() {
     test_query_common(TestQueryCommonOpts {
         input_data: Some(vec![
