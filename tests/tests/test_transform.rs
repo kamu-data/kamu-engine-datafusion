@@ -299,8 +299,6 @@ async fn test_query_common(opts: TestQueryCommonOpts) {
     if let Some(expected_data) = expected_data {
         let actual_data = read_data_pretty(&new_data_path).await;
         assert_eq!(expected_data.trim(), actual_data);
-    } else {
-        assert!(!new_data_path.exists());
     }
 
     if let Some(expected_schema) = opts.expected_schema {

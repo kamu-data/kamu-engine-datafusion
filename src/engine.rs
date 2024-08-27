@@ -166,20 +166,17 @@ impl Engine {
 
         let new_watermark = Self::compute_new_watermark(&request);
 
-        if num_rows == 0 {
-            Ok(TransformResponseSuccess {
-                new_offset_interval: None,
-                new_watermark,
-            })
-        } else {
-            Ok(TransformResponseSuccess {
-                new_offset_interval: Some(OffsetInterval {
+        Ok(TransformResponseSuccess {
+            new_offset_interval: if num_rows != 0 {
+                Some(OffsetInterval {
                     start: request.next_offset,
                     end: request.next_offset + num_rows - 1,
-                }),
-                new_watermark,
-            })
-        }
+                })
+            } else {
+                None
+            },
+            new_watermark,
+        })
     }
 
     #[tracing::instrument(level = "info", skip_all, fields(dataset_id = %input.dataset_id, dataset_alias = %input.dataset_alias, query_alias = %input.query_alias))]
@@ -618,13 +615,7 @@ impl Engine {
             .unwrap()
             .value(0);
 
-        if num_records > 0 {
-            tracing::info!(?path, num_records, "Produced parquet file");
-        } else {
-            // Clean up empty file
-            tracing::info!("Produced empty result",);
-            let _ = std::fs::remove_file(path);
-        }
+        tracing::info!(?path, num_records, "Produced parquet file");
         Ok(num_records as u64)
     }
 }
