@@ -3,17 +3,17 @@ use std::error::Error;
 use std::sync::Arc;
 
 use internal_error::InternalError;
-use opendatafabric::engine::grpc_generated::engine_server::Engine as EngineGRPC;
-use opendatafabric::engine::grpc_generated::{
+use odf::engine::grpc_generated::engine_server::Engine as EngineGRPC;
+use odf::engine::grpc_generated::{
     RawQueryRequest as RawQueryRequestGRPC,
     RawQueryResponse as RawQueryResponseGRPC,
     TransformRequest as TransformRequestGRPC,
     TransformResponse as TransformResponseGRPC,
 };
-use opendatafabric::engine::{ExecuteRawQueryError, ExecuteTransformError};
-use opendatafabric::serde::flatbuffers::FlatbuffersEngineProtocol;
-use opendatafabric::serde::{EngineProtocolDeserializer, EngineProtocolSerializer};
-use opendatafabric::{
+use odf::engine::{ExecuteRawQueryError, ExecuteTransformError};
+use odf::serde::flatbuffers::FlatbuffersEngineProtocol;
+use odf::serde::{EngineProtocolDeserializer, EngineProtocolSerializer};
+use odf::{
     RawQueryResponse,
     RawQueryResponseInternalError,
     TransformResponse,
@@ -71,7 +71,7 @@ impl EngineGRPCImpl {
 
 /////////////////////////////////////////////////////////////////////////////////////////
 
-#[tonic::async_trait]
+#[async_trait::async_trait]
 impl EngineGRPC for EngineGRPCImpl {
     type ExecuteRawQueryStream = ReceiverStream<Result<RawQueryResponseGRPC, Status>>;
     type ExecuteTransformStream = ReceiverStream<Result<TransformResponseGRPC, Status>>;

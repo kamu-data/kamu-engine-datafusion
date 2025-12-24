@@ -8,23 +8,18 @@ workspace-default-features = "deny"
 # Avoid adding dependencies to this list as this slows down compilation.
 # Find another ways to avoid duplication.
 skip-tree = [
-    { name = "base64" },         # http v1 upgrade
-    { name = "heck" },           # via arrow and datafusion
-    { name = "indexmap" },       # TODO: multiple libraries need to update to v2
-    { name = "itertools" },
-    { name = "miniz_oxide" },
-    { name = "redox_syscall" },  # via parking-lot
-    { name = "regex-syntax" },   # via tracing-subscriber
-    { name = "regex-automata" }, # via matchers
-    { name = "syn" },            # TODO: waiting for snafu to update to v2
-    { name = "tracing-log" },    # TODO: remove bunyan log formatter
+    { name = "bzip2" },       # async-compression needs an update
+    { name = "getrandom" },
+    { name = "hashbrown" },
+    { name = "rand_core" },
+    { name = "tracing-log" }, # TODO: remove bunyan log formatter
     { name = "windows-sys" },
 ]
 deny = [
-    # Use `md-5` instead, which is part of the RustCrypto ecosystem
     { name = "md5" },
-    # TODO: We should decide whether to stick with OpenSSL
-    # { name = "rustls" },
+    { name = "native-tls" },
+    { name = "openssl" },
+    { name = "rustls" },
 ]
 
 
@@ -35,14 +30,12 @@ allow = [
     "0BSD",
     "BSD-2-Clause",
     "BSD-3-Clause",
+    "bzip2-1.0.6",
     "MIT",
+    "Unicode-3.0",
     "Zlib",
 ]
 private = { ignore = true }
-
-[[licenses.exceptions]]
-allow = ["Unicode-DFS-2016"]
-name = "unicode-ident"
 
 
 [[licenses.clarify]]
@@ -60,12 +53,7 @@ allow-org = { github = ["kamu-data"] }
 [advisories]
 yanked = "deny"
 ignore = [
-    # TODO: Revisit after upgrade to latest DF
-    "RUSTSEC-2025-0056",
-    "RUSTSEC-2024-0421",
-    "RUSTSEC-2024-0384",
-    "RUSTSEC-2023-0086",
+    # paste - no longer maintained
+    # https://rustsec.org/advisories/RUSTSEC-2024-0436
     "RUSTSEC-2024-0436",
-    "RUSTSEC-2025-0023",
-    "RUSTSEC-2025-0055",
 ]

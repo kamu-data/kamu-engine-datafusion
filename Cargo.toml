@@ -1,6 +1,6 @@
 [package]
 name = "kamu-engine-datafusion"
-version = "0.8.1"
+version = "0.9.0"
 authors = ["Kamu Data Inc. <info@kamu.dev>"]
 license-file = "LICENSE.txt"
 edition = "2024"
@@ -13,13 +13,11 @@ doctest = false
 
 [dependencies]
 # Kamu
-internal-error = { git = "https://github.com/kamu-data/kamu-cli", tag = "v0.196.0", version = "0.196.0", default-features = false }
-opendatafabric = { git = "https://github.com/kamu-data/kamu-cli", tag = "v0.196.0", version = "0.196.0", default-features = false }
-# internal-error = { git = "https://github.com/kamu-data/kamu-cli", version = "0.150.0", branch = "feature/unified-schema", default-features = false }
-# opendatafabric = { git = "https://github.com/kamu-data/kamu-cli", version = "0.150.0", branch = "feature/unified-schema", default-features = false }
+internal-error = { git = "https://github.com/kamu-data/kamu-cli", branch = "chore/upgrade-datafusion", version = "0.255.0", default-features = false }
+odf = { package = "opendatafabric-metadata", git = "https://github.com/kamu-data/kamu-cli", branch = "chore/upgrade-datafusion", version = "0.255.0", default-features = false }
 
 # Egine
-datafusion = { version = "41", default-features = false, features = [
+datafusion = { version = "51", default-features = false, features = [
     "crypto_expressions",
     "encoding_expressions",
     "parquet",
@@ -27,20 +25,20 @@ datafusion = { version = "41", default-features = false, features = [
     "unicode_expressions",
     "compression",
 ] }
-datafusion-functions-json = { version = "0.41", default-features = false }
+datafusion-functions-json = { version = "0.51", default-features = false }
 
 # Utils
 async-trait = { version = "0.1", default-features = false }
 chrono = { version = "0.4", default-features = false }
 indoc = { version = "2", default-features = false }
-thiserror = { version = "1", default-features = false }
+thiserror = { version = "2", default-features = false }
 tokio = { version = "1", default-features = false, features = [
     "rt-multi-thread",
     "signal",
     "time",
 ] }
 tokio-stream = { version = "0.1", default-features = false }
-tonic = { version = "0.11", default-features = false }
+tonic = { version = "0.14", default-features = false, features = ["router"] }
 tracing = { version = "0.1", default-features = false }
 tracing-bunyan-formatter = { version = "0.3", default-features = false }
 tracing-log = { version = "0.2", default-features = false }
@@ -48,7 +46,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 
 [dev-dependencies]
-env_logger = "0.10"
+env_logger = "0.11"
 pretty_assertions = "1"
 tempfile = "3"
 test-log = { version = "0.2", features = ["trace"] }
@@ -60,7 +58,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # See: https://doc.rust-lang.org/cargo/reference/profiles.html#debug
 [profile.release.package]
 datafusion = { debug = 1 }
-opendatafabric = { debug = 1 }
+opendatafabric-metadata = { debug = 1 }
 kamu-engine-datafusion = { debug = 1 }
 
 

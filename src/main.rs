@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use kamu_engine_datafusion::engine::Engine;
 use kamu_engine_datafusion::grpc::EngineGRPCImpl;
-use opendatafabric::engine::grpc_generated::engine_server::EngineServer;
+use odf::engine::grpc_generated::engine_server::EngineServer;
 use tonic::transport::Server;
 
 /////////////////////////////////////////////////////////////////////////////////////////

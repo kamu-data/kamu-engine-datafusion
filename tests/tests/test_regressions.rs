@@ -107,12 +107,11 @@ async fn test_issues_arrow_4308() {
 
 // Regression test for: https://github.com/apache/datafusion/issues/14281
 #[test_log::test(tokio::test)]
-#[should_panic]
 async fn test_issues_datafusion_14281() {
     use std::path::PathBuf;
 
     use chrono::DateTime;
-    use opendatafabric::*;
+    use odf::*;
 
     let workspace_dir = PathBuf::from_str(env!("CARGO_MANIFEST_DIR")).unwrap();
     let tempdir = tempfile::tempdir().unwrap();
@@ -161,8 +160,8 @@ async fn test_issues_datafusion_14281() {
                 event_time_column: "event_time".to_string(),
             },
             offset_interval: Some(OffsetInterval { start: 0, end: 2 }),
-            data_paths: vec![workspace_dir.join("data/x/data.parquet")],
-            schema_file: workspace_dir.join("data/x/schema.parquet"),
+            data_paths: vec![workspace_dir.join("data/datafusion-issue-14281/data.parquet")],
+            schema_file: workspace_dir.join("data/datafusion-issue-14281/schema.parquet"),
             explicit_watermarks: vec![Watermark {
                 system_time: DateTime::parse_from_rfc3339("2050-01-01T12:00:00Z")
                     .unwrap()

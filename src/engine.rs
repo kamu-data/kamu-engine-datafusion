@@ -4,18 +4,21 @@ use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use datafusion::arrow::datatypes::{DataType, TimeUnit};
-use datafusion::config::{ParquetColumnOptions, ParquetOptions, TableParquetOptions};
+use datafusion::config::{
+    ParquetColumnOptions,
+    ParquetEncryptionOptions,
+    ParquetOptions,
+    TableParquetOptions,
+};
 use datafusion::dataframe::DataFrameWriteOptions;
 use datafusion::error::DataFusionError;
-use datafusion::logical_expr as expr;
-use datafusion::logical_expr::expr::WindowFunction;
 use datafusion::logical_expr::{CreateView, DdlStatement, LogicalPlan};
 use datafusion::prelude::*;
 use datafusion::scalar::ScalarValue;
 use datafusion::sql::TableReference;
 use internal_error::*;
-use opendatafabric::engine::{ExecuteRawQueryError, ExecuteTransformError};
-use opendatafabric::*;
+use odf::engine::{ExecuteRawQueryError, ExecuteTransformError};
+use odf::*;
 
 /////////////////////////////////////////////////////////////////////////////////////////
 
@@ -113,6 +116,7 @@ impl Engine {
                     },
                     column_specific_options: HashMap::new(),
                     key_value_metadata: HashMap::new(),
+                    crypto: ParquetEncryptionOptions::default(),
                 },
             )
             .await?;
@@ -236,6 +240,8 @@ impl Engine {
                     table_partition_cols: Vec::new(),
                     parquet_pruning: None,
                     skip_metadata: None,
+                    file_decryption_properties: None,
+                    metadata_size_hint: None,
                 },
             )
             .await
@@ -294,6 +300,7 @@ impl Engine {
             input: Arc::new(logical_plan),
             or_replace: false,
             definition: Some(query.to_string()),
+            temporary: false,
         }));
 
         ctx.execute_logical_plan(create_view).await.int_err()?;
@@ -486,29 +493,26 @@ impl Engine {
             .collect();
 
         // Offset
-        // TODO: For some reason this adds two collumns: the expected "offset", but also
-        // "ROW_NUMBER()" for now we simply filter out the latter.
+        // TODO: For some reason this adds two columns: the expected
+        // "offset", but also "ROW_NUMBER()" for now we simply filter out the
+        // latter.
         let df = df.with_column(
             &vocab.offset_column,
-            Expr::WindowFunction(WindowFunction {
-                fun: expr::WindowFunctionDefinition::BuiltInWindowFunction(
-                    expr::BuiltInWindowFunction::RowNumber,
-                ),
-                args: vec![],
-                partition_by: vec![],
-                // TODO: Can this potentially lead to reordering?
-                order_by: vec![Expr::Literal(ScalarValue::Null).sort(true, false)],
-                window_frame: expr::WindowFrame::new(Some(false)),
-                null_treatment: None,
-            }),
+            datafusion::functions_window::row_number::row_number()
+                .order_by(vec![
+                    Expr::Literal(ScalarValue::Null, None).sort(true, false),
+                ])
+                .partition_by(vec![lit(1)])
+                .build()?,
         )?;
 
-        // TODO: Cast to UInt64 after Spark is updated
-        // See: https://github.com/kamu-data/kamu-cli/issues/445
         let df = df.with_column(
             &vocab.offset_column,
             cast(
-                col(Column::from_name(&vocab.offset_column)) + lit(start_offset as i64 - 1),
+                col(Column::from_name(&vocab.offset_column))
+                    + lit(i64::try_from(start_offset).unwrap() - 1),
+                // TODO: Replace with UInt64 after Spark is updated
+                // See: https://github.com/kamu-data/kamu-cli/issues/445
                 DataType::Int64,
             ),
         )?;
@@ -531,10 +535,13 @@ impl Engine {
         // System time
         let df = df.with_column(
             &vocab.system_time_column,
-            Expr::Literal(ScalarValue::TimestampMillisecond(
-                Some(system_time.timestamp_millis()),
-                Some("UTC".into()),
-            )),
+            Expr::Literal(
+                ScalarValue::TimestampMillisecond(
+                    Some(system_time.timestamp_millis()),
+                    Some("UTC".into()),
+                ),
+                None,
+            ),
         )?;
 
         // Reorder columns for nice looks
@@ -583,6 +590,7 @@ impl Engine {
                 ),
             ]),
             key_value_metadata: HashMap::new(),
+            crypto: ParquetEncryptionOptions::default(),
         }
     }
 
@@ -596,14 +604,27 @@ impl Engine {
 
         tracing::info!(?path, "Writing result to parquet");
 
+        // FIXME: The  extension is currently necessary for DataFusion to
+        // respect the single-file output
+        // See: https://github.com/apache/datafusion/issues/13323
+        let tmp_path = if path.extension().is_some() {
+            path.to_path_buf()
+        } else {
+            path.with_extension("parquet")
+        };
+
         let res = df
             .write_parquet(
-                path.as_os_str().to_str().unwrap(),
+                tmp_path.as_os_str().to_str().unwrap(),
                 DataFrameWriteOptions::new().with_single_file_output(true),
                 Some(props),
             )
             .await
             .int_err()?;
+
+        if tmp_path != *path {
+            std::fs::rename(&tmp_path, path).int_err()?;
+        }
 
         assert_eq!(res.len(), 1);
         assert_eq!(res[0].num_columns(), 1);

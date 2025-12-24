@@ -5,30 +5,30 @@ use std::sync::Arc;
 use chrono::{DateTime, Utc};
 use indoc::indoc;
 use kamu_engine_datafusion::engine::Engine;
-use opendatafabric::engine::ExecuteTransformError;
-use opendatafabric::*;
+use odf::engine::ExecuteTransformError;
+use odf::*;
 use pretty_assertions::assert_eq;
 
 ///////////////////////////////////////////////////////////////////////////////
 
 #[derive(Debug)]
 struct Record {
-    offset: u64,
+    offset: i64,
     op: OperationType,
     system_time: i64,
     event_time: i64,
     city: String,
-    population: u64,
+    population: i64,
 }
 
 impl Record {
     fn new(
-        offset: u64,
+        offset: i64,
         op: OperationType,
         system_time: &str,
         event_time: &str,
         city: &str,
-        population: u64,
+        population: i64,
     ) -> Self {
         Self {
             offset,
@@ -77,7 +77,7 @@ fn write_sample_data(path: impl AsRef<Path>, data: &[Record]) {
             false,
         ),
         Field::new("city", DataType::Utf8, false),
-        Field::new("population", DataType::UInt64, false),
+        Field::new("population", DataType::Int64, false),
     ]));
 
     let record_batch = RecordBatch::try_new(
@@ -104,7 +104,7 @@ fn write_sample_data(path: impl AsRef<Path>, data: &[Record]) {
             Arc::new(array::StringArray::from(
                 data.iter().map(|r| r.city.clone()).collect::<Vec<_>>(),
             )),
-            Arc::new(array::UInt64Array::from(
+            Arc::new(array::Int64Array::from(
                 data.iter().map(|r| r.population).collect::<Vec<_>>(),
             )),
         ],
@@ -259,8 +259,8 @@ async fn test_query_common(opts: TestQueryCommonOpts) {
                 None
             } else {
                 Some(OffsetInterval {
-                    start: input_data.iter().map(|r| r.offset).min().unwrap(),
-                    end: input_data.iter().map(|r| r.offset).max().unwrap(),
+                    start: input_data.iter().map(|r| r.offset).min().unwrap() as u64,
+                    end: input_data.iter().map(|r| r.offset).max().unwrap() as u64,
                 })
             },
             vocab: DatasetVocabulary::default(),
@@ -315,7 +315,7 @@ async fn test_result_schema() {
         expected_schema: Some(indoc!(
             r#"
             message arrow_schema {
-              OPTIONAL INT64 offset;
+              REQUIRED INT64 offset;
               REQUIRED INT32 op;
               REQUIRED INT64 system_time (TIMESTAMP(MILLIS,true));
               REQUIRED INT64 event_time (TIMESTAMP(MILLIS,true));
@@ -337,7 +337,7 @@ async fn test_result_optimal_parquet_encoding() {
         expected_schema: Some(indoc!(
             r#"
             message arrow_schema {
-              OPTIONAL INT64 offset;
+              REQUIRED INT64 offset;
               REQUIRED INT32 op;
               REQUIRED INT64 system_time (TIMESTAMP(MILLIS,true));
               REQUIRED INT64 event_time (TIMESTAMP(MILLIS,true));
@@ -667,12 +667,12 @@ async fn test_event_time_coerced_to_millis() {
         expected_schema: Some(indoc!(
             r#"
             message arrow_schema {
-              OPTIONAL INT64 offset;
+              REQUIRED INT64 offset;
               REQUIRED INT32 op;
               REQUIRED INT64 system_time (TIMESTAMP(MILLIS,true));
               REQUIRED INT64 event_time (TIMESTAMP(MILLIS,true));
               REQUIRED BYTE_ARRAY city (STRING);
-              REQUIRED INT64 population (INTEGER(64,false));
+              REQUIRED INT64 population;
             }
             "#,
         )),
@@ -704,12 +704,12 @@ async fn test_ident_case_sensitivity() {
         expected_schema: Some(indoc!(
             r#"
             message arrow_schema {
-              OPTIONAL INT64 offset;
+              REQUIRED INT64 offset;
               REQUIRED INT32 op;
               REQUIRED INT64 system_time (TIMESTAMP(MILLIS,true));
               REQUIRED INT64 event_time (TIMESTAMP(MILLIS,true));
               REQUIRED BYTE_ARRAY City (STRING);
-              REQUIRED INT64 Population (INTEGER(64,false));
+              REQUIRED INT64 Population;
             }
             "#,
         )),
@@ -742,7 +742,7 @@ async fn test_json_extensions() {
         expected_schema: Some(indoc!(
             r#"
             message arrow_schema {
-              OPTIONAL INT64 offset;
+              REQUIRED INT64 offset;
               REQUIRED INT32 op;
               REQUIRED INT64 system_time (TIMESTAMP(MILLIS,true));
               REQUIRED INT64 event_time (TIMESTAMP(MILLIS,true));
