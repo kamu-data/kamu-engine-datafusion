@@ -3,7 +3,7 @@ name = "kamu-engine-datafusion"
 version = "0.8.1"
 authors = ["Kamu Data Inc. <info@kamu.dev>"]
 license-file = "LICENSE.txt"
-edition = "2021"
+edition = "2024"
 publish = false
 
 

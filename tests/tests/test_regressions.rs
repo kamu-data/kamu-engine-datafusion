@@ -1,3 +1,4 @@
+use std::str::FromStr as _;
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{DataType, TimeUnit};
@@ -100,4 +101,84 @@ async fn test_issues_arrow_4308() {
         *system_time_dt,
         DataType::Timestamp(TimeUnit::Millisecond, Some(Arc::from("UTC")))
     );
+}
+
+///////////////////////////////////////////////////////////////////////////////
+
+// Regression test for: https://github.com/apache/datafusion/issues/14281
+#[test_log::test(tokio::test)]
+#[should_panic]
+async fn test_issues_datafusion_14281() {
+    use std::path::PathBuf;
+
+    use chrono::DateTime;
+    use opendatafabric::*;
+
+    let workspace_dir = PathBuf::from_str(env!("CARGO_MANIFEST_DIR")).unwrap();
+    let tempdir = tempfile::tempdir().unwrap();
+    let new_data_path = tempdir.path().join("output");
+    let new_checkpoint_path = tempdir.path().join("checkpoint");
+
+    let request = TransformRequest {
+        dataset_id: DatasetID::new_seeded_ed25519(b"bar"),
+        dataset_alias: "deriv".try_into().unwrap(),
+        system_time: DateTime::parse_from_rfc3339("2050-01-02T12:00:00Z")
+            .unwrap()
+            .into(),
+        vocab: DatasetVocabulary {
+            offset_column: "offset".to_string(),
+            operation_type_column: "op".to_string(),
+            system_time_column: "system_time".to_string(),
+            event_time_column: "event_time".to_string(),
+        },
+        transform: TransformSql {
+            engine: "datafusion".to_string(),
+            version: None,
+            query: None,
+            queries: Some(vec![SqlQueryStep {
+                alias: None,
+                query: r#"
+                SELECT
+                    op,
+                    event_time,
+                    city,
+                    cast(population * 10 as int) as population_x10
+                FROM root
+                "#
+                .to_string(),
+            }]),
+            temporal_tables: None,
+        }
+        .into(),
+        query_inputs: vec![TransformRequestInput {
+            dataset_id: DatasetID::new_seeded_ed25519(b"foo"),
+            dataset_alias: "root".try_into().unwrap(),
+            query_alias: "root".to_string(),
+            vocab: DatasetVocabulary {
+                offset_column: "offset".to_string(),
+                operation_type_column: "op".to_string(),
+                system_time_column: "system_time".to_string(),
+                event_time_column: "event_time".to_string(),
+            },
+            offset_interval: Some(OffsetInterval { start: 0, end: 2 }),
+            data_paths: vec![workspace_dir.join("data/x/data.parquet")],
+            schema_file: workspace_dir.join("data/x/schema.parquet"),
+            explicit_watermarks: vec![Watermark {
+                system_time: DateTime::parse_from_rfc3339("2050-01-01T12:00:00Z")
+                    .unwrap()
+                    .into(),
+                event_time: DateTime::parse_from_rfc3339("2050-01-01T12:00:00Z")
+                    .unwrap()
+                    .into(),
+            }],
+        }],
+        next_offset: 0,
+        prev_checkpoint_path: None,
+        new_checkpoint_path,
+        new_data_path,
+    };
+
+    let engine = kamu_engine_datafusion::engine::Engine::new().await;
+
+    engine.execute_transform(request).await.unwrap();
 }
