@@ -59,4 +59,13 @@ allow-org = { github = ["kamu-data"] }
 
 [advisories]
 yanked = "deny"
-ignore = []
+ignore = [
+    # TODO: Revisit after upgrade to latest DF
+    "RUSTSEC-2025-0056",
+    "RUSTSEC-2024-0421",
+    "RUSTSEC-2024-0384",
+    "RUSTSEC-2023-0086",
+    "RUSTSEC-2024-0436",
+    "RUSTSEC-2025-0023",
+    "RUSTSEC-2025-0055",
+]

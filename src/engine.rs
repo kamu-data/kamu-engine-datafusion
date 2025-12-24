@@ -400,7 +400,7 @@ impl Engine {
                             vocab.operation_type_column, typ
                         ),
                     }
-                    .into())
+                    .into());
                 }
             }
         }
