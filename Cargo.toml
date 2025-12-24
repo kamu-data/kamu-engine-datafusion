@@ -13,8 +13,8 @@ doctest = false
 
 [dependencies]
 # Kamu
-internal-error = { git = "https://github.com/kamu-data/kamu-cli", branch = "chore/upgrade-datafusion", version = "0.255.0", default-features = false }
-odf = { package = "opendatafabric-metadata", git = "https://github.com/kamu-data/kamu-cli", branch = "chore/upgrade-datafusion", version = "0.255.0", default-features = false }
+internal-error = { git = "https://github.com/kamu-data/kamu-cli", branch = "master", version = "0.255.0", default-features = false }
+odf = { package = "opendatafabric-metadata", git = "https://github.com/kamu-data/kamu-cli", branch = "master", version = "0.255.0", default-features = false }
 
 # Egine
 datafusion = { version = "51", default-features = false, features = [

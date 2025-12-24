@@ -1570,7 +1570,7 @@ checksum = "48c757948c5ede0e46177b7add2e67155f70e33c07fea8284df6576da70b3719"
 [[package]]
 name = "enum-variants"
 version = "0.255.0"
-source = "git+https://github.com/kamu-data/kamu-cli?branch=chore%2Fupgrade-datafusion#b6e2b925abecc7df160fd551069c938346121a67"
+source = "git+https://github.com/kamu-data/kamu-cli?branch=master#ba5878eadc28ca0afc01d2aa99ebb9af804a7c8b"
 
 [[package]]
 name = "env_filter"
@@ -2172,7 +2172,7 @@ checksum = "8bb03732005da905c88227371639bf1ad885cc712789c011c31c5fb3ab3ccf02"
 [[package]]
 name = "internal-error"
 version = "0.255.0"
-source = "git+https://github.com/kamu-data/kamu-cli?branch=chore%2Fupgrade-datafusion#b6e2b925abecc7df160fd551069c938346121a67"
+source = "git+https://github.com/kamu-data/kamu-cli?branch=master#ba5878eadc28ca0afc01d2aa99ebb9af804a7c8b"
 dependencies = [
  "thiserror",
 ]
@@ -2504,7 +2504,7 @@ dependencies = [
 [[package]]
 name = "multiformats"
 version = "0.255.0"
-source = "git+https://github.com/kamu-data/kamu-cli?branch=chore%2Fupgrade-datafusion#b6e2b925abecc7df160fd551069c938346121a67"
+source = "git+https://github.com/kamu-data/kamu-cli?branch=master#ba5878eadc28ca0afc01d2aa99ebb9af804a7c8b"
 dependencies = [
  "base64",
  "bs58",
@@ -2611,7 +2611,7 @@ checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
 [[package]]
 name = "opendatafabric-metadata"
 version = "0.255.0"
-source = "git+https://github.com/kamu-data/kamu-cli?branch=chore%2Fupgrade-datafusion#b6e2b925abecc7df160fd551069c938346121a67"
+source = "git+https://github.com/kamu-data/kamu-cli?branch=master#ba5878eadc28ca0afc01d2aa99ebb9af804a7c8b"
 dependencies = [
  "base64",
  "bitflags",

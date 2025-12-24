@@ -53,10 +53,10 @@ impl EngineGRPCImpl {
             write!(message, ": {}", current_err).unwrap();
 
             // Find inner-most backtrace
-            if let Some(bt) = core::error::request_ref::<Backtrace>(current_err) {
-                if bt.status() == BacktraceStatus::Captured {
-                    backtrace = Some(bt);
-                }
+            if let Some(bt) = core::error::request_ref::<Backtrace>(current_err)
+                && bt.status() == BacktraceStatus::Captured
+            {
+                backtrace = Some(bt);
             }
         }
 
